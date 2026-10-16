@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="VFR Nav">
+<meta name="theme-color" content="#0b1118">
+<title>VFR Nav</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ================= CARTE / NAV ================= -->
+  <section id="view-map" class="view active">
+    <div id="map"></div>
+
+    <div id="instruments">
+      <div class="wpline">
+        <span id="i-mode" class="badge">LIBRE</span>
+        <span id="i-wp">Pas de destination</span>
+        <span id="i-alt" class="alt">— ft</span>
+      </div>
+      <div class="grid">
+        <div class="cell main"><label>CAP V</label><b id="i-hdg">—</b><small id="i-wind"></small></div>
+        <div class="cell"><label>ROUTE</label><b id="i-trk">—</b></div>
+        <div class="cell"><label>VS kt</label><b id="i-gs">—</b></div>
+        <div class="cell"><label>DIST NM</label><b id="i-dist">—</b></div>
+        <div class="cell"><label>ETE</label><b id="i-ete">—</b></div>
+        <div class="cell"><label>ETA</label><b id="i-eta">—</b><small id="i-etadest"></small></div>
+      </div>
+    </div>
+
+    <div id="alert" class="hidden"></div>
+
+    <div id="mapbtns">
+      <button id="b-orient" title="Orientation">N↑</button>
+      <button id="b-follow" class="on" title="Centrer">◎</button>
+      <button id="b-direct" title="Direct To">D→</button>
+      <button id="b-rec" title="Enregistrer la trace">● REC</button>
+      <button id="b-legnext" title="Point suivant" class="hidden">⏭</button>
+      <button id="b-stopnav" title="Arrêter la navigation" class="hidden">✕</button>
+    </div>
+    <div id="gpsstatus">GPS…</div>
+  </section>
+
+  <!-- ================= PRÉPA ================= -->
+  <section id="view-prep" class="view page">
+    <h1>Préparation</h1>
+    <div class="card">
+      <div class="row">
+        <select id="p-select"></select>
+        <button id="p-new" class="sm">Nouveau</button>
+      </div>
+      <div class="row">
+        <input id="p-name" placeholder="Nom du vol">
+        <button id="p-dup" class="sm ghost">Dupliquer</button>
+        <button id="p-del" class="sm danger">Suppr.</button>
+      </div>
+      <div class="row">
+        <label class="lbl">Appareil</label>
+        <select id="p-ac"></select>
+      </div>
+      <div class="row">
+        <label class="lbl">Vent général</label>
+        <input id="p-wdir" type="number" inputmode="numeric" placeholder="dir °" class="num">
+        <span>/</span>
+        <input id="p-wspd" type="number" inputmode="numeric" placeholder="kt" class="num">
+        <span class="hint">vent vrai, d'où il vient</span>
+      </div>
+    </div>
+
+    <h2>Points de passage</h2>
+    <div class="card">
+      <div class="search">
+        <input id="p-search" placeholder="Ajouter : code OACI, nom de terrain, point perso…" autocomplete="off">
+        <div id="p-results" class="results"></div>
+      </div>
+      <p class="hint">Astuce : appui long sur la carte pour ajouter n'importe quel point.</p>
+      <div id="p-wps"></div>
+      <div class="row">
+        <button id="p-reverse" class="sm ghost">⇅ Inverser la route</button>
+        <button id="p-clear" class="sm ghost">Vider</button>
+      </div>
+    </div>
+
+    <h2>Log de nav</h2>
+    <div class="card scroll-x"><table id="p-log"></table></div>
+
+    <h2>Bilan carburant</h2>
+    <div class="card">
+      <div class="row">
+        <label class="lbl">Carburant à bord (L)</label>
+        <input id="p-onboard" type="number" inputmode="decimal" class="num">
+      </div>
+      <div class="row">
+        <label class="lbl">Marge supplémentaire (min)</label>
+        <input id="p-extra" type="number" inputmode="numeric" class="num" placeholder="0">
+      </div>
+      <table id="p-fuel" class="kv"></table>
+    </div>
+
+    <button id="p-activate" class="big">✈ Activer ce vol en navigation</button>
+    <p class="hint center">Aide à la navigation non certifiée — à utiliser avec une carte OACI à jour.</p>
+  </section>
+
+  <!-- ================= FLOTTE ================= -->
+  <section id="view-fleet" class="view page">
+    <h1>Flotte</h1>
+    <div id="f-list"></div>
+    <button id="f-add" class="big">+ Ajouter un avion / ULM</button>
+    <div id="f-form" class="card hidden">
+      <h2 id="f-title">Appareil</h2>
+      <div class="row"><label class="lbl">Type</label>
+        <select id="f-type"><option value="avion">Avion</option><option value="ulm">ULM</option></select></div>
+      <div class="row"><label class="lbl">Nom / modèle</label><input id="f-name" placeholder="DR400-120"></div>
+      <div class="row"><label class="lbl">Immatriculation</label><input id="f-reg" placeholder="F-GXXX" autocapitalize="characters"></div>
+      <div class="row"><label class="lbl">Vitesse propre croisière (kt)</label><input id="f-tas" type="number" inputmode="decimal" class="num"></div>
+      <div class="row"><label class="lbl">Consommation (L/h)</label><input id="f-conso" type="number" inputmode="decimal" class="num"></div>
+      <div class="row"><label class="lbl">Capacité utilisable (L)</label><input id="f-cap" type="number" inputmode="decimal" class="num"></div>
+      <div class="row"><label class="lbl">Roulage (L)</label><input id="f-taxi" type="number" inputmode="decimal" class="num"></div>
+      <div class="row"><label class="lbl">Réserve finale (min)</label><input id="f-res" type="number" inputmode="numeric" class="num"></div>
+      <div class="row">
+        <button id="f-save">Enregistrer</button>
+        <button id="f-cancel" class="ghost">Annuler</button>
+        <button id="f-del" class="danger">Supprimer</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= TRACES ================= -->
+  <section id="view-tracks" class="view page">
+    <h1>Traces</h1>
+    <div id="t-list"></div>
+  </section>
+
+  <!-- ================= RÉGLAGES ================= -->
+  <section id="view-settings" class="view page">
+    <h1>Réglages</h1>
+
+    <h2>Alertes de points de passage</h2>
+    <div class="card">
+      <div class="row"><label class="lbl">Alertes activées</label><input id="s-alert" type="checkbox" class="switch"></div>
+      <div class="row"><label class="lbl">Alerter <b id="s-alertval">60 s</b> avant le point</label></div>
+      <input id="s-alertsec" type="range" min="15" max="300" step="15">
+    </div>
+
+    <h2>Navigation</h2>
+    <div class="card">
+      <div class="row"><label class="lbl">Heure ETA</label>
+        <select id="s-clock"><option value="local">Locale</option><option value="utc">UTC</option></select></div>
+      <div class="row"><label class="lbl">Thème</label>
+        <select id="s-theme"><option value="dark">Sombre</option><option value="light">Clair (plein soleil)</option></select></div>
+      <div class="row"><label class="lbl">Garder l'écran allumé</label><input id="s-wake" type="checkbox" class="switch"></div>
+      <div class="row"><label class="lbl">Démarrer la trace automatiquement au décollage (&gt; 40 kt)</label><input id="s-autorec" type="checkbox" class="switch"></div>
+    </div>
+
+    <h2>Carte</h2>
+    <div class="card">
+      <div class="row"><label class="lbl">Fond de carte</label>
+        <select id="s-base">
+          <option value="otm">OpenTopoMap (relief)</option>
+          <option value="osm">OpenStreetMap</option>
+          <option value="custom">URL personnalisée</option>
+        </select></div>
+      <div class="row col"><label class="lbl">URL personnalisée (XYZ, {z}/{x}/{y})</label>
+        <input id="s-custom" placeholder="https://…/{z}/{x}/{y}.png"></div>
+      <p class="hint">Carte OACI IGN : si tu disposes d'une clé Géoplateforme, colle par exemple
+        <code>https://data.geopf.fr/private/wmts?apikey=TA_CLE&amp;SERVICE=WMTS&amp;REQUEST=GetTile&amp;VERSION=1.0.0&amp;LAYER=GEOGRAPHICALGRIDSYSTEMS.MAPS.SCAN-OACI&amp;STYLE=normal&amp;FORMAT=image/jpeg&amp;TILEMATRIXSET=PM&amp;TILEMATRIX={z}&amp;TILEROW={y}&amp;TILECOL={x}</code> (accès et licence à vérifier).</p>
+      <div class="row col"><label class="lbl">Clé API OpenAIP (espaces aériens en surimpression)</label>
+        <input id="s-oaip" placeholder="clé gratuite sur openaip.net" autocomplete="off"></div>
+      <div class="row"><label class="lbl">Afficher espaces aériens OpenAIP</label><input id="s-oaipon" type="checkbox" class="switch"></div>
+    </div>
+
+    <h2>Données hors ligne</h2>
+    <div class="card">
+      <p id="s-datainfo" class="hint">Aucune donnée aéronautique chargée.</p>
+      <button id="s-update">⟳ Télécharger / mettre à jour les terrains (France)</button>
+      <p class="hint">Source : OurAirports (aérodromes, fréquences, balises). Les plateformes ULM privées peuvent manquer : ajoute-les en points perso.</p>
+      <hr>
+      <p class="hint">Cartes hors ligne : télécharge les tuiles autour du vol actif (couloir de 15 NM), ou la région visible. Les zones déjà consultées restent en cache.</p>
+      <div class="row">
+        <label class="lbl">Zoom max</label>
+        <select id="s-zmax"><option>10</option><option selected>11</option><option>12</option></select>
+      </div>
+      <div class="row">
+        <button id="s-dlroute" class="sm">Couloir du vol</button>
+        <button id="s-dlview" class="sm">Zone visible</button>
+        <button id="s-clearcache" class="sm danger">Vider</button>
+      </div>
+      <p id="s-dlinfo" class="hint"></p>
+    </div>
+
+    <h2>Points perso</h2>
+    <div class="card"><div id="s-userwps"></div></div>
+
+    <h2>Mode démo</h2>
+    <div class="card">
+      <p class="hint">Simule un vol le long du plan actif pour tester l'app au sol.</p>
+      <div class="row">
+        <select id="s-simx"><option value="1">×1</option><option value="5" selected>×5</option><option value="20">×20</option></select>
+        <button id="s-sim" class="sm">Démarrer la simulation</button>
+      </div>
+    </div>
+
+    <h2>Sauvegarde</h2>
+    <div class="card">
+      <div class="row">
+        <button id="s-export" class="sm">Exporter (fichier)</button>
+        <label class="btn sm ghost">Importer<input id="s-import" type="file" accept=".json,application/json" hidden></label>
+      </div>
+      <p class="hint">Pour transférer flotte, vols et points perso vers un autre appareil ou un ami.</p>
+    </div>
+    <p class="hint center" id="s-version"></p>
+  </section>
+
+  <nav id="tabs">
+    <button data-view="map" class="active"><span>🗺</span>Carte</button>
+    <button data-view="prep"><span>📋</span>Prépa</button>
+    <button data-view="fleet"><span>✈</span>Flotte</button>
+    <button data-view="tracks"><span>〰</span>Traces</button>
+    <button data-view="settings"><span>⚙</span>Réglages</button>
+  </nav>
+
+  <!-- Feuille de choix (Direct To, actions point) -->
+  <div id="sheet" class="hidden">
+    <div class="sheet-inner">
+      <div id="sheet-body"></div>
+      <button id="sheet-close" class="ghost">Fermer</button>
+    </div>
+  </div>
+  <div id="toast" class="hidden"></div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="nav.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
