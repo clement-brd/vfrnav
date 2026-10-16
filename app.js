@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -35,9 +35,10 @@
 
   /* ---------- État ---------- */
   const DEF_SETTINGS = { alertOn: true, alertSec: 60, clock: 'local', theme: 'dark', wake: true, autorec: true,
-    base: 'otm', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
+    base: 'ign', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
     aspOn: true, aspMaxFloor: 11500, sivOn: false, rppOn: true, heliOn: false };
   const S = Object.assign({}, DEF_SETTINGS, LS.get('settings', {}));
+  if (S.base === 'light' || S.base === 'voyager') S.base = 'ign'; // anciens fonds Carto (clé désormais requise)
   let fleet = LS.get('fleet', null);
   if (!fleet) fleet = [{ id: uid(), type: 'avion', name: 'DR400-120 (exemple, à adapter)', reg: 'F-XXXX', tas: 105, conso: 25, capacity: 110, taxi: 2, reserveMin: 30 }];
   let plans = LS.get('plans', []);
@@ -265,11 +266,11 @@
   let labelT = null, map = null, mapReady = false, planeAdded = false, planeMarker = null, wpMarkers = [];
   const BASES = {
     otm: { tiles: ['a', 'b', 'c'].map(s => `https://${s}.tile.opentopomap.org/{z}/{x}/{y}.png`), maxzoom: 17, attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)' },
-    light: { tiles: ['a', 'b', 'c'].map(s => `https://${s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png`), maxzoom: 19, attribution: '© OpenStreetMap © CARTO' },
-    voyager: { tiles: ['a', 'b', 'c'].map(s => `https://${s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png`), maxzoom: 19, attribution: '© OpenStreetMap © CARTO' },
+    ign: { tiles: ['https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}'], maxzoom: 19, attribution: '© IGN Plan IGN' },
+    ortho: { tiles: ['https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}'], maxzoom: 19, attribution: '© IGN Photographies aériennes' },
     osm: { tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], maxzoom: 19, attribution: '© OpenStreetMap' }
   };
-  const baseDef = () => S.base === 'custom' && S.custom ? { tiles: [S.custom], maxzoom: 18, attribution: 'Fond personnalisé' } : BASES[S.base] || BASES.otm;
+  const baseDef = () => S.base === 'custom' && S.custom ? { tiles: [S.custom], maxzoom: 18, attribution: 'Fond personnalisé' } : BASES[S.base] || BASES.ign;
   const oaipUrl = () => `https://api.tiles.openaip.net/api/data/openaip/{z}/{x}/{y}.png?apiKey=${encodeURIComponent(S.oaip)}`;
   const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
   const fc = (list, geom, props) => ({ type: 'FeatureCollection', features: list.map(o => ({ type: 'Feature', geometry: geom(o), properties: props(o) })) });
@@ -334,9 +335,9 @@
       for (const id of ['asp', 'track-shown', 'trackline', 'route', 'leg', 'ads', 'navaids', 'rpp', 'userwps', 'wps']) map.addSource(id, { type: 'geojson', data: emptyFC() });
       // Espaces aériens
       map.addLayer({ id: 'asp-fill', type: 'fill', source: 'asp', paint: { 'fill-color': ASP_COLOR,
-        'fill-opacity': ['match', ['get', 'cat'], 'P', .16, 'R', .07, 'D', .04, 'CTR', .10, 'TMA', .025, .02] } });
+        'fill-opacity': ['match', ['get', 'cat'], 'P', .10, 'R', .025, 'D', .015, 'CTR', .06, 'TMA', .012, .01] } });
       map.addLayer({ id: 'asp-band', type: 'line', source: 'asp', filter: ['in', ['get', 'cat'], ['literal', ['P', 'R']]],
-        paint: { 'line-color': C.red, 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 3, 11, 9], 'line-opacity': .22 } });
+        paint: { 'line-color': C.red, 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 2, 11, 6], 'line-opacity': .18 } });
       map.addLayer({ id: 'asp-solid', type: 'line', source: 'asp', filter: ['in', ['get', 'cat'], ['literal', ['P', 'R', 'TMA', 'OTH']]],
         paint: { 'line-color': ASP_COLOR, 'line-width': ['match', ['get', 'cat'], 'P', 2.5, 'R', 2, 'TMA', 1.6, 1.2] } });
       map.addLayer({ id: 'asp-dash', type: 'line', source: 'asp', filter: ['in', ['get', 'cat'], ['literal', ['D', 'CTR']]],
@@ -416,7 +417,7 @@
     for (const id of ['oaip', 'base']) { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); }
     const b = baseDef();
     map.addSource('base', { type: 'raster', tiles: b.tiles, tileSize: 256, maxzoom: b.maxzoom, attribution: b.attribution + ' | Données aéro © openAIP' });
-    map.addLayer({ id: 'base', type: 'raster', source: 'base', paint: { 'raster-saturation': S.base === 'otm' ? -0.25 : 0 } }, before);
+    map.addLayer({ id: 'base', type: 'raster', source: 'base', paint: { 'raster-saturation': S.base === 'otm' ? -0.25 : S.base === 'ign' ? -0.35 : 0 } }, before);
     if (S.oaipOn && S.oaip) {
       map.addSource('oaip', { type: 'raster', tiles: [oaipUrl()], tileSize: 256, maxzoom: 14, attribution: '© openAIP' });
       map.addLayer({ id: 'oaip', type: 'raster', source: 'oaip' }, before);
