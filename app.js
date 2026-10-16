@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.4.0';
+  const VERSION = '1.5.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -35,10 +35,11 @@
 
   /* ---------- État ---------- */
   const DEF_SETTINGS = { alertOn: true, alertSec: 60, clock: 'local', theme: 'dark', wake: true, autorec: true,
-    base: 'ign', ignKey: '', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
+    base: 'oaci', ignKey: 'ign_scan_ws', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
     aspOn: true, aspMaxFloor: 11500, sivOn: false, rppOn: true, heliOn: false };
   const S = Object.assign({}, DEF_SETTINGS, LS.get('settings', {}));
   if (S.base === 'light' || S.base === 'voyager') S.base = 'ign'; // anciens fonds Carto (clé désormais requise)
+  if (!S.oaciV15) { S.base = 'oaci'; if (!S.ignKey) S.ignKey = 'ign_scan_ws'; S.oaciV15 = true; LS.set('settings', S); } // passage à la carte OACI par défaut
   let fleet = LS.get('fleet', null);
   if (!fleet) fleet = [{ id: uid(), type: 'avion', name: 'DR400-120 (exemple, à adapter)', reg: 'F-XXXX', tas: 105, conso: 25, capacity: 110, taxi: 2, reserveMin: 30 }];
   let plans = LS.get('plans', []);
@@ -379,11 +380,14 @@
       map.addLayer({ id: 'userwps-label', type: 'symbol', source: 'userwps',
         layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1, 0] }, paint: Object.assign({}, LABEL_PAINT, { 'text-color': '#106a3a' }) });
       refreshDataLayers(); refreshRoute();
+      applyOverlayMode(S.base === 'oaci' && !!S.ignKey);
       const el = document.createElement('div');
       el.innerHTML = '<svg class="plane" viewBox="0 0 40 40"><path d="M20 2l3 12 13 6v3l-13-3-1 10 5 4v2l-7-2-7 2v-2l5-4-1-10-13 3v-3l13-6z" fill="#ffd400" stroke="#000" stroke-width="1.5"/></svg>';
       planeMarker = new maplibregl.Marker({ element: el, rotationAlignment: 'map' }).setLngLat([last.lon, last.lat]);
       if (lastFix) placePlane(lastFix);
     });
+    map.on('error', e => { if (e && e.sourceId === 'base') onBaseError(); });
+    map.on('sourcedata', e => { if (e.sourceId === 'base' && e.tile && e.tile.state === 'loaded') baseOk = true; });
     map.on('moveend', () => { const c = map.getCenter(); LS.set('lastPos', { lon: c.lng, lat: c.lat, z: map.getZoom() }); });
     map.on('dragstart', e => { if (e.originalEvent) setFollow(false); });
     map.on('click', e => {
@@ -415,13 +419,32 @@
       .sort((a, b) => a.lowerFt - b.lowerFt);
   }
 
-  function setBase() {
+  let baseOk = false, baseErr = 0, baseFellBack = false;
+  function onBaseError() {
+    if (S.base !== 'oaci' || baseOk || baseFellBack) return;
+    if (++baseErr >= 6) {
+      baseFellBack = true;
+      toast('Carte OACI indisponible (clé refusée ou hors ligne) : affichage du Plan IGN.', 5000);
+      setBase('ign');
+    }
+  }
+  function applyOverlayMode(oaci) {
+    if (!map.getLayer('asp-fill')) return;
+    map.setPaintProperty('asp-fill', 'fill-opacity', oaci ? 0.001 : ['match', ['get', 'cat'], 'P', .10, 'R', .025, 'D', .015, 'CTR', .06, 'TMA', .012, .01]);
+    map.setPaintProperty('asp-band', 'line-opacity', oaci ? 0 : .18);
+    for (const id of ['asp-solid', 'asp-dash', 'asp-dot']) map.setPaintProperty(id, 'line-opacity', oaci ? 0.35 : 1);
+    for (const id of ['asp-label', 'ads-label', 'navaids-label', 'rpp-label']) map.setLayoutProperty(id, 'visibility', oaci ? 'none' : 'visible');
+  }
+  function setBase(force) {
     if (!map || !mapReady) return;
+    if (!force) { baseOk = false; baseErr = 0; baseFellBack = false; }
     const before = map.getLayer('asp-fill') ? 'asp-fill' : undefined;
     for (const id of ['oaip', 'base']) { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); }
-    const b = baseDef();
+    const useOaci = !force && S.base === 'oaci' && !!S.ignKey;
+    const b = force ? BASES[force] : baseDef();
     map.addSource('base', { type: 'raster', tiles: b.tiles, tileSize: 256, maxzoom: b.maxzoom, attribution: b.attribution + ' | Données aéro © openAIP' });
-    map.addLayer({ id: 'base', type: 'raster', source: 'base', paint: { 'raster-saturation': S.base === 'otm' ? -0.25 : S.base === 'ign' ? -0.35 : 0 } }, before);
+    map.addLayer({ id: 'base', type: 'raster', source: 'base', paint: { 'raster-saturation': S.base === 'otm' && !force ? -0.25 : (force === 'ign' || S.base === 'ign') ? -0.35 : 0 } }, before);
+    applyOverlayMode(useOaci);
     if (S.oaipOn && S.oaip) {
       map.addSource('oaip', { type: 'raster', tiles: [oaipUrl()], tileSize: 256, maxzoom: 14, attribution: '© openAIP' });
       map.addLayer({ id: 'oaip', type: 'raster', source: 'oaip' }, before);
