@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -164,11 +164,11 @@
     if (!r.ok) throw new Error(r.status + ' ' + url);
     return r.json();
   }
-  async function fromExport(info) {
+  async function fromExport(info, base) {
     const out = {};
     for (const [k, f, label] of [['apt', 'apt', 'aérodromes'], ['asp', 'asp', 'espaces aériens'], ['nav', 'nav', 'balises'], ['rpp', 'rpp', 'points de report']]) {
-      info.textContent = `Téléchargement des ${label} (OpenAIP)…`;
-      out[k] = (await getJSON(OAIP_EXPORT + f + '.geojson')).features.map(x => ({ p: x.properties, g: x.geometry }));
+      info.textContent = `Téléchargement des ${label}…`;
+      out[k] = (await getJSON((base || OAIP_EXPORT) + f + '.geojson')).features.map(x => ({ p: x.properties, g: x.geometry }));
     }
     return out;
   }
@@ -207,7 +207,7 @@
   async function updateData() {
     const info = $('#s-datainfo'), btn = $('#s-update'); btn.disabled = true;
     let res = null, src = '', errs = [];
-    for (const [name, fn] of [['OpenAIP', fromExport], ['API OpenAIP', S.oaip ? fromApi : null]]) {
+    for (const [name, fn] of [['openAIP (copie GitHub)', i => fromExport(i, './fr_')], ['openAIP', fromExport], ['API openAIP', S.oaip ? fromApi : null]]) {
       if (!fn) continue;
       try {
         const raw = await fn(info);
@@ -231,7 +231,7 @@
     // Polices des étiquettes pour le hors ligne
     for (const r of ['0-255', '256-511', '8192-8447']) fetch(GLYPHS.replace('{fontstack}', encodeURIComponent(FONT[0])).replace('{range}', r)).catch(() => {});
     toast(`${airports.length} terrains, ${airspaces.length} espaces, ${navaids.length} balises (${src})`, 4000);
-    if (src === 'OurAirports') toast('Espaces aériens indisponibles via OurAirports : renseigne une clé OpenAIP et relance.', 6000);
+    if (src === 'OurAirports') toast('Espaces aériens indisponibles : lance la tâche « Données aéro » dans l\'onglet Actions de ton dépôt GitHub, puis réessaie.', 7000);
     btn.disabled = false; renderDataInfo();
   }
   function renderDataInfo() {
