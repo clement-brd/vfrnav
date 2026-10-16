@@ -161,11 +161,24 @@
       <div class="row"><label class="lbl">Démarrer la trace automatiquement au décollage (&gt; 40 kt)</label><input id="s-autorec" type="checkbox" class="switch"></div>
     </div>
 
+    <h2>Couches aéronautiques (style OACI)</h2>
+    <div class="card">
+      <div class="row"><label class="lbl">Espaces aériens (P, R, D, CTR, TMA…)</label><input id="s-aspon" type="checkbox" class="switch"></div>
+      <div class="row"><label class="lbl">Afficher si plancher sous</label>
+        <select id="s-aspfloor"><option value="6500">FL065</option><option value="11500">FL115</option><option value="19500">FL195</option><option value="99999">Tout</option></select></div>
+      <div class="row"><label class="lbl">Secteurs SIV</label><input id="s-sivon" type="checkbox" class="switch"></div>
+      <div class="row"><label class="lbl">Points de report VFR</label><input id="s-rppon" type="checkbox" class="switch"></div>
+      <div class="row"><label class="lbl">Hélistations</label><input id="s-helion" type="checkbox" class="switch"></div>
+      <p class="hint">Touche une zone sur la carte pour voir son nom, son plafond, son plancher et sa fréquence.</p>
+    </div>
+
     <h2>Carte</h2>
     <div class="card">
       <div class="row"><label class="lbl">Fond de carte</label>
         <select id="s-base">
           <option value="otm">OpenTopoMap (relief)</option>
+          <option value="light">Carto clair (lisibilité type OACI)</option>
+          <option value="voyager">Carto Voyager</option>
           <option value="osm">OpenStreetMap</option>
           <option value="custom">URL personnalisée</option>
         </select></div>
@@ -173,16 +186,16 @@
         <input id="s-custom" placeholder="https://…/{z}/{x}/{y}.png"></div>
       <p class="hint">Carte OACI IGN : si tu disposes d'une clé Géoplateforme, colle par exemple
         <code>https://data.geopf.fr/private/wmts?apikey=TA_CLE&amp;SERVICE=WMTS&amp;REQUEST=GetTile&amp;VERSION=1.0.0&amp;LAYER=GEOGRAPHICALGRIDSYSTEMS.MAPS.SCAN-OACI&amp;STYLE=normal&amp;FORMAT=image/jpeg&amp;TILEMATRIXSET=PM&amp;TILEMATRIX={z}&amp;TILEROW={y}&amp;TILECOL={x}</code> (accès et licence à vérifier).</p>
-      <div class="row col"><label class="lbl">Clé API OpenAIP (espaces aériens en surimpression)</label>
+      <div class="row col"><label class="lbl">Clé API OpenAIP (facultative : secours de téléchargement et surimpression raster)</label>
         <input id="s-oaip" placeholder="clé gratuite sur openaip.net" autocomplete="off"></div>
-      <div class="row"><label class="lbl">Afficher espaces aériens OpenAIP</label><input id="s-oaipon" type="checkbox" class="switch"></div>
+      <div class="row"><label class="lbl">Surimpression raster OpenAIP</label><input id="s-oaipon" type="checkbox" class="switch"></div>
     </div>
 
     <h2>Données hors ligne</h2>
     <div class="card">
       <p id="s-datainfo" class="hint">Aucune donnée aéronautique chargée.</p>
-      <button id="s-update">⟳ Télécharger / mettre à jour les terrains (France)</button>
-      <p class="hint">Source : OurAirports (aérodromes, fréquences, balises). Les plateformes ULM privées peuvent manquer : ajoute-les en points perso.</p>
+      <button id="s-update">⟳ Télécharger / mettre à jour les données aéro (France)</button>
+      <p class="hint">Source : openAIP (aérodromes, ULM, espaces aériens, balises, points de report — CC BY-NC). À mettre à jour régulièrement : les données ne remplacent pas le SIA ni les NOTAM.</p>
       <hr>
       <p class="hint">Cartes hors ligne : télécharge les tuiles autour du vol actif (couloir de 15 NM), ou la région visible. Les zones déjà consultées restent en cache.</p>
       <div class="row">

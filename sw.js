@@ -1,5 +1,5 @@
 /* VFR Nav — service worker : fonctionnement hors ligne */
-const APP_CACHE = 'vfrnav-app-v2';
+const APP_CACHE = 'vfrnav-app-v3';
 const TILE_CACHE = 'vfrnav-tiles';
 const LIB = [
   'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js',
@@ -15,8 +15,9 @@ self.addEventListener('activate', e => {
     .then(() => self.clients.claim()));
 });
 
-const tileKey = u => u.replace(/:\/\/[abc]\.tile\.opentopomap\.org/, '://tile.opentopomap.org');
-const isTile = u => /\/\d+\/\d+\/\d+\.(png|jpe?g|webp)(\?|$)/.test(u) || /[?&]TILEMATRIX=/i.test(u);
+const tileKey = u => u.replace(/:\/\/[abc]\.tile\.opentopomap\.org/, '://tile.opentopomap.org').replace(/:\/\/[abcd]\.basemaps\.cartocdn\.com/, '://basemaps.cartocdn.com');
+const isGlyph = u => /\/font\/[^/]+\/\d+-\d+\.pbf/.test(u);
+const isTile = u => isGlyph(u) || /\/\d+\/\d+\/\d+\.(png|jpe?g|webp)(\?|$)/.test(u) || /[?&]TILEMATRIX=/i.test(u);
 
 self.addEventListener('fetch', e => {
   const req = e.request;

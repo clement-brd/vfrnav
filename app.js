@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -35,7 +35,8 @@
 
   /* ---------- État ---------- */
   const DEF_SETTINGS = { alertOn: true, alertSec: 60, clock: 'local', theme: 'dark', wake: true, autorec: true,
-    base: 'otm', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north' };
+    base: 'otm', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
+    aspOn: true, aspMaxFloor: 11500, sivOn: false, rppOn: true, heliOn: false };
   const S = Object.assign({}, DEF_SETTINGS, LS.get('settings', {}));
   let fleet = LS.get('fleet', null);
   if (!fleet) fleet = [{ id: uid(), type: 'avion', name: 'DR400-120 (exemple, à adapter)', reg: 'F-XXXX', tas: 105, conso: 25, capacity: 110, taxi: 2, reserveMin: 30 }];
@@ -84,50 +85,158 @@
   document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => showView(b.dataset.view));
 
   /* ---------- Données aéronautiques ---------- */
-  const DATA_BASE = 'https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/';
+  // Source principale : exports publics OpenAIP (CC BY-NC). Repli : API OpenAIP avec clé, puis OurAirports.
+  const OAIP_EXPORT = 'https://s3.openaip.net/openaip-system-exports/fr_';
+  const OAIP_API = 'https://api.core.openaip.net/api/';
+  const OURAIRPORTS = 'https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/';
+  const GLYPHS = 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf';
+  const FONT = ['Open Sans Semibold'];
+  let airspaces = [], rpps = [];
+
   async function loadData() {
     try {
       const d = await IDB.get('aerodata');
-      if (d) { airports = d.airports || []; navaids = d.navaids || []; LS.set('dataDate', d.date); }
+      if (d) { airports = d.airports || []; navaids = d.navaids || []; airspaces = d.airspaces || []; rpps = d.rpps || []; LS.set('dataDate', d.date); LS.set('dataSrc', d.src || ''); }
     } catch (e) { console.warn(e); }
     refreshDataLayers();
   }
-  async function updateData() {
-    const info = $('#s-datainfo');
-    const btn = $('#s-update'); btn.disabled = true;
-    try {
-      info.textContent = 'Téléchargement des aérodromes (~12 Mo)…';
-      const aTxt = await (await fetch(DATA_BASE + 'airports.csv', { cache: 'no-store' })).text();
-      info.textContent = 'Analyse…';
-      const ap = [], byRef = {};
-      N.parseCSV(aTxt, r => {
-        if (r.iso_country !== 'FR' || r.continent !== 'EU') return;
-        if (!/^(small|medium|large)_airport$/.test(r.type)) return;
-        const o = { id: r.ident, icao: r.icao_code || r.gps_code || '', name: r.name, lat: +r.latitude_deg, lon: +r.longitude_deg,
-          elev: r.elevation_ft ? +r.elevation_ft : null, type: r.type.replace('_airport', ''), city: r.municipality, freqs: [] };
-        ap.push(o); byRef[r.id] = o;
-      });
-      info.textContent = 'Fréquences…';
-      const fTxt = await (await fetch(DATA_BASE + 'airport-frequencies.csv', { cache: 'no-store' })).text();
-      N.parseCSV(fTxt, r => { const a = byRef[r.airport_ref]; if (a) a.freqs.push({ t: r.type, d: r.description, f: r.frequency_mhz }); });
-      info.textContent = 'Balises…';
-      const nTxt = await (await fetch(DATA_BASE + 'navaids.csv', { cache: 'no-store' })).text();
-      const nv = [];
-      N.parseCSV(nTxt, r => { if (r.iso_country === 'FR' && /VOR|NDB|DME|TACAN/.test(r.type)) nv.push({ id: r.ident, name: r.name, type: r.type, freq: r.frequency_khz, lat: +r.latitude_deg, lon: +r.longitude_deg }); });
-      airports = ap; navaids = nv;
-      const date = new Date().toISOString();
-      await IDB.set('aerodata', { airports, navaids, date });
-      LS.set('dataDate', date);
-      refreshDataLayers();
-      toast(`${ap.length} terrains et ${nv.length} balises chargés`);
-    } catch (e) {
-      console.error(e); toast('Échec du téléchargement : réseau indisponible ?', 4000);
+
+  /* Décodage des codes OpenAIP */
+  const NAV_TYPES = ['DME', 'TACAN', 'NDB', 'VOR', 'VOR-DME', 'VORTAC', 'DVOR', 'DVOR-DME', 'DVORTAC'];
+  const AD_CAT = { 0: 'civil', 1: 'glider', 2: 'civil', 3: 'civil', 4: 'heli', 5: 'mil', 6: 'ulm', 7: 'heli', 8: 'closed', 9: 'civil', 10: 'water', 11: 'ulm', 12: 'ulm', 13: 'civil' };
+  const AD_TYPE_TXT = { 0: 'Aéroport', 1: 'Vol à voile', 2: 'Aérodrome', 3: 'Aéroport international', 4: 'Hélistation militaire', 5: 'Base militaire', 6: 'Plateforme ULM', 7: 'Hélistation', 8: 'Fermé', 9: 'Aérodrome IFR', 10: 'Hydrobase', 11: 'Piste privée', 12: 'Piste agricole', 13: 'Altiport' };
+  const PAVED = new Set([0, 1, 5, 7, 8, 16, 17, 21]);
+  const SURF_TXT = s => PAVED.has(s) ? 'revêtue' : s === 2 ? 'herbe' : s === 12 ? 'gravier' : s === 13 ? 'terre' : s === 4 ? 'eau' : 'non revêtue';
+  const ASP_CAT = { 3: 'P', 1: 'R', 2: 'D', 4: 'CTR', 36: 'CTR', 14: 'CTR', 7: 'TMA', 26: 'TMA', 13: 'TMA', 5: 'TMZ', 6: 'RMZ', 8: 'TRA', 9: 'TRA', 21: 'GLD', 33: 'SIV' };
+  const ASP_SKIP = new Set([10, 11, 12, 15, 16, 27, 34, 35]); // FIR, UIR, ADIZ, voies aériennes, secteurs ACC…
+  const ICAO_CLASS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+  const toFt = (v, unit) => unit === 0 ? v * M2FT : unit === 6 ? v * 100 : v;
+  function fmtLimit(l) {
+    if (!l) return '?';
+    if (l.unit === 6) return 'FL' + String(l.value).padStart(3, '0');
+    if (l.value === 0 && l.referenceDatum === 0) return 'SFC';
+    const ft = Math.round(toFt(l.value, l.unit));
+    return ft + (l.referenceDatum === 0 ? ' ASFC' : l.referenceDatum === 2 ? ' STD' : ' AMSL');
+  }
+  const fmtFreq = f => f ? f.value + (f.unit === 1 ? ' kHz' : ' MHz') : '';
+
+  function runwaysOf(rw) {
+    const out = [], used = new Set();
+    rw.forEach((r, i) => {
+      if (used.has(i)) return; used.add(i);
+      let des = r.designator || '';
+      const j = rw.findIndex((q, k) => !used.has(k) && Math.abs(((r.trueHeading - q.trueHeading + 360) % 360) - 180) < 15);
+      if (j >= 0) { used.add(j); des += '/' + (rw[j].designator || ''); }
+      const len = r.dimension && r.dimension.length ? Math.round(r.dimension.length.unit === 1 ? r.dimension.length.value / M2FT : r.dimension.length.value) : null;
+      out.push({ des, len, surf: r.surface ? r.surface.mainComposite : 22, hdg: r.trueHeading, main: !!r.mainRunway });
+    });
+    return out;
+  }
+  function convAirport(p, g) {
+    const rw = runwaysOf(p.runways || []);
+    const main = rw.find(r => r.main) || rw[0];
+    const fr = (p.frequencies || []).map(f => ({ t: f.name || '', f: f.value, primary: !!f.primary }));
+    const prim = fr.find(f => f.primary) || fr[0];
+    return { key: p._id, id: p.icaoCode || p.altIdentifier || (p.name || '').slice(0, 10), icao: p.icaoCode || '', name: p.name,
+      lon: g.coordinates[0], lat: g.coordinates[1], type: p.type, cat: AD_CAT[p.type] || 'civil',
+      elev: p.elevation ? Math.round(toFt(p.elevation.value, p.elevation.unit)) : null,
+      rwys: rw, rhdg: main ? main.hdg % 180 : 0, paved: main ? PAVED.has(main.surf) : false, hasRwy: !!main,
+      freqs: fr, pfreq: prim ? prim.f : '', ppr: !!p.ppr, priv: !!p.private };
+  }
+  function convAirspace(p, g) {
+    if (ASP_SKIP.has(p.type) || !g || !/Polygon/.test(g.type)) return null;
+    const cat = ASP_CAT[p.type] || 'OTH';
+    const lo = p.lowerLimit, up = p.upperLimit;
+    const cls = ICAO_CLASS[p.icaoClass] || '';
+    return { name: p.name, cat, cls, type: p.type, lowerFt: lo ? toFt(lo.value, lo.unit) : 0, lower: fmtLimit(lo), upper: fmtLimit(up),
+      freq: (p.frequencies || []).map(f => (f.name ? f.name + ' ' : '') + f.value).join(' · '), notam: !!p.byNotam, geometry: g };
+  }
+  function convNavaid(p, g) {
+    return { key: p._id, id: p.identifier, name: p.name, type: NAV_TYPES[p.type] || 'NAV', freqTxt: fmtFreq(p.frequency), lon: g.coordinates[0], lat: g.coordinates[1] };
+  }
+  function convRpp(p, g, apByKey) {
+    const ad = (p.airports || []).map(k => apByKey[k]).filter(Boolean)[0];
+    return { key: p._id, name: (ad ? (ad.icao || ad.id) + ' ' : '') + p.name, short: p.name, comp: !!p.compulsory, lon: g.coordinates[0], lat: g.coordinates[1] };
+  }
+
+  async function getJSON(url, headers) {
+    const r = await fetch(url, { cache: 'no-store', headers: headers || {} });
+    if (!r.ok) throw new Error(r.status + ' ' + url);
+    return r.json();
+  }
+  async function fromExport(info) {
+    const out = {};
+    for (const [k, f, label] of [['apt', 'apt', 'aérodromes'], ['asp', 'asp', 'espaces aériens'], ['nav', 'nav', 'balises'], ['rpp', 'rpp', 'points de report']]) {
+      info.textContent = `Téléchargement des ${label} (OpenAIP)…`;
+      out[k] = (await getJSON(OAIP_EXPORT + f + '.geojson')).features.map(x => ({ p: x.properties, g: x.geometry }));
     }
+    return out;
+  }
+  async function fromApi(info) {
+    const out = {}, h = { 'x-openaip-api-key': S.oaip };
+    for (const [k, path, label] of [['apt', 'airports', 'aérodromes'], ['asp', 'airspaces', 'espaces aériens'], ['nav', 'navaids', 'balises'], ['rpp', 'reporting-points', 'points de report']]) {
+      out[k] = []; let page = 1, total = 1;
+      do {
+        info.textContent = `API OpenAIP : ${label} (page ${page})…`;
+        const d = await getJSON(`${OAIP_API}${path}?country=FR&limit=1000&page=${page}`, h);
+        (d.items || []).forEach(it => out[k].push({ p: it, g: it.geometry }));
+        total = d.totalPages || 1; page++;
+      } while (page <= total);
+    }
+    return out;
+  }
+  async function fromOurAirports(info) {
+    info.textContent = 'Repli : téléchargement OurAirports (~12 Mo)…';
+    const aTxt = await (await fetch(OURAIRPORTS + 'airports.csv', { cache: 'no-store' })).text();
+    const ap = [], byRef = {};
+    const T = { small_airport: 2, medium_airport: 0, large_airport: 3 };
+    N.parseCSV(aTxt, r => {
+      if (r.iso_country !== 'FR' || r.continent !== 'EU' || !(r.type in T)) return;
+      const o = { key: 'oa' + r.id, id: r.ident, icao: r.icao_code || r.gps_code || '', name: r.name, lat: +r.latitude_deg, lon: +r.longitude_deg, type: T[r.type], cat: 'civil',
+        elev: r.elevation_ft ? +r.elevation_ft : null, rwys: [], rhdg: 0, paved: r.type !== 'small_airport', hasRwy: false, freqs: [], pfreq: '' };
+      ap.push(o); byRef[r.id] = o;
+    });
+    const fTxt = await (await fetch(OURAIRPORTS + 'airport-frequencies.csv', { cache: 'no-store' })).text();
+    N.parseCSV(fTxt, r => { const a = byRef[r.airport_ref]; if (a) { a.freqs.push({ t: r.type, f: r.frequency_mhz }); a.pfreq = a.pfreq || r.frequency_mhz; } });
+    const nTxt = await (await fetch(OURAIRPORTS + 'navaids.csv', { cache: 'no-store' })).text();
+    const nv = [];
+    N.parseCSV(nTxt, r => { if (r.iso_country === 'FR' && /VOR|NDB|DME|TACAN/.test(r.type)) nv.push({ key: 'oan' + r.id, id: r.ident, name: r.name, type: r.type, freqTxt: +r.frequency_khz >= 10000 ? (r.frequency_khz / 1000).toFixed(2) + ' MHz' : r.frequency_khz + ' kHz', lat: +r.latitude_deg, lon: +r.longitude_deg }); });
+    return { airports: ap, navaids: nv, airspaces: [], rpps: [] };
+  }
+
+  async function updateData() {
+    const info = $('#s-datainfo'), btn = $('#s-update'); btn.disabled = true;
+    let res = null, src = '', errs = [];
+    for (const [name, fn] of [['OpenAIP', fromExport], ['API OpenAIP', S.oaip ? fromApi : null]]) {
+      if (!fn) continue;
+      try {
+        const raw = await fn(info);
+        info.textContent = 'Préparation des données…';
+        const ap = raw.apt.filter(x => x.g && x.g.type === 'Point').map(x => convAirport(x.p, x.g));
+        const byKey = {}; ap.forEach(a => byKey[a.key] = a);
+        res = { airports: ap, airspaces: raw.asp.map(x => convAirspace(x.p, x.g)).filter(Boolean),
+          navaids: raw.nav.filter(x => x.g).map(x => convNavaid(x.p, x.g)), rpps: raw.rpp.filter(x => x.g).map(x => convRpp(x.p, x.g, byKey)) };
+        src = name; break;
+      } catch (e) { console.warn(name, e); errs.push(name); }
+    }
+    if (!res) {
+      try { res = await fromOurAirports(info); src = 'OurAirports'; }
+      catch (e) { console.error(e); toast('Échec du téléchargement : réseau indisponible ?', 4000); btn.disabled = false; renderDataInfo(); return; }
+    }
+    ({ airports, navaids, airspaces, rpps } = res);
+    const date = new Date().toISOString();
+    await IDB.set('aerodata', { ...res, date, src });
+    LS.set('dataDate', date); LS.set('dataSrc', src);
+    refreshDataLayers();
+    // Polices des étiquettes pour le hors ligne
+    for (const r of ['0-255', '256-511', '8192-8447']) fetch(GLYPHS.replace('{fontstack}', encodeURIComponent(FONT[0])).replace('{range}', r)).catch(() => {});
+    toast(`${airports.length} terrains, ${airspaces.length} espaces, ${navaids.length} balises (${src})`, 4000);
+    if (src === 'OurAirports') toast('Espaces aériens indisponibles via OurAirports : renseigne une clé OpenAIP et relance.', 6000);
     btn.disabled = false; renderDataInfo();
   }
   function renderDataInfo() {
     const d = LS.get('dataDate', null);
-    $('#s-datainfo').textContent = d ? `${airports.length} terrains, ${navaids.length} balises — mis à jour le ${new Date(d).toLocaleDateString('fr-FR')}`
+    $('#s-datainfo').textContent = d ? `${airports.length} terrains, ${airspaces.length} espaces aériens, ${navaids.length} balises, ${rpps.length} points de report — ${LS.get('dataSrc', '')}, mis à jour le ${new Date(d).toLocaleDateString('fr-FR')}`
       : 'Aucune donnée aéronautique chargée. Connecte-toi au réseau et lance la mise à jour.';
   }
 
@@ -143,25 +252,66 @@
       else if (n.includes(q)) add({ ...a, kind: 'ad' }, 2);
     }
     for (const v of navaids) { if (fold(v.id) === q || fold(v.name).includes(q)) add({ ...v, kind: 'navaid' }, fold(v.id) === q ? 0 : 3); }
-    // coordonnées "47.25 6.03"
+    for (const r of rpps) { const n = fold(r.name); if (n.startsWith(q) || n.includes(' ' + q)) add({ ...r, kind: 'rpp' }, 2); }
     const m = q.match(/^(-?\d+(?:[.,]\d+)?)[ ,;]+(-?\d+(?:[.,]\d+)?)$/);
     if (m) add({ name: 'Point ' + m[1] + ' ' + m[2], lat: +m[1].replace(',', '.'), lon: +m[2].replace(',', '.'), kind: 'coord' }, 0);
     return out.sort((a, b) => a.score - b.score).slice(0, limit).map(o => o.p);
   }
-  const ptLabel = p => p.kind === 'ad' ? `${p.icao || p.id} — ${p.name}` : p.kind === 'navaid' ? `${p.id} ${p.type} — ${p.name}` : p.name;
+  const ptLabel = p => p.kind === 'ad' ? `${p.icao || p.id} — ${p.name}` : p.kind === 'navaid' ? `${p.id} ${p.type} — ${p.name}` : p.kind === 'rpp' ? `Point de report ${p.name}` : p.name;
   const ptShort = p => p.kind === 'ad' ? (p.icao || p.id) : p.kind === 'navaid' ? p.id : p.name;
   const toWp = p => ({ name: ptShort(p), full: ptLabel(p), lat: p.lat, lon: p.lon });
 
   /* ---------- Carte ---------- */
-  let labelT = null, map = null, mapReady = false, planeAdded = false, planeMarker = null, wpMarkers = [], adLabelMarkers = [];
+  let labelT = null, map = null, mapReady = false, planeAdded = false, planeMarker = null, wpMarkers = [];
   const BASES = {
-    otm: { tiles: ['a', 'b', 'c'].map(s => `https://${s}.tile.opentopomap.org/{z}/{x}/{y}.png`), maxzoom: 17,
-      attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)' },
+    otm: { tiles: ['a', 'b', 'c'].map(s => `https://${s}.tile.opentopomap.org/{z}/{x}/{y}.png`), maxzoom: 17, attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)' },
+    light: { tiles: ['a', 'b', 'c'].map(s => `https://${s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png`), maxzoom: 19, attribution: '© OpenStreetMap © CARTO' },
+    voyager: { tiles: ['a', 'b', 'c'].map(s => `https://${s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png`), maxzoom: 19, attribution: '© OpenStreetMap © CARTO' },
     osm: { tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], maxzoom: 19, attribution: '© OpenStreetMap' }
   };
   const baseDef = () => S.base === 'custom' && S.custom ? { tiles: [S.custom], maxzoom: 18, attribution: 'Fond personnalisé' } : BASES[S.base] || BASES.otm;
   const oaipUrl = () => `https://api.tiles.openaip.net/api/data/openaip/{z}/{x}/{y}.png?apiKey=${encodeURIComponent(S.oaip)}`;
   const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
+  const fc = (list, geom, props) => ({ type: 'FeatureCollection', features: list.map(o => ({ type: 'Feature', geometry: geom(o), properties: props(o) })) });
+  const ptGeom = o => ({ type: 'Point', coordinates: [o.lon, o.lat] });
+
+  /* Couleurs inspirées de la carte OACI */
+  const C = { ad: '#a3005f', mil: '#c0142b', heli: '#a3005f', ulm: '#5a3d9a', glider: '#2b7a3d', closed: '#7a7a7a', water: '#1561b0',
+    nav: '#123f8c', rpp: '#111111', red: '#d0021b', blue: '#1a57b5', grey: '#444', purple: '#7b3fa0', yellow: '#b08d00', green: '#2f8f4e', orange: '#e07b00' };
+
+  function makeIcons() {
+    const mk = (name, draw, size = 48) => {
+      if (map.hasImage(name)) return;
+      const c = document.createElement('canvas'); c.width = c.height = size;
+      const g = c.getContext('2d'); g.lineJoin = 'round'; draw(g, size / 2); map.addImage(name, g.getImageData(0, 0, size, size), { pixelRatio: 2 });
+    };
+    const ring = (g, m, r, col, w = 4) => { g.beginPath(); g.arc(m, m, r, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill(); g.lineWidth = w; g.strokeStyle = col; g.stroke(); };
+    const bar = (g, m, col, filled) => { g.lineWidth = 2.5; g.strokeStyle = col; g.fillStyle = col; if (filled) g.fillRect(m - 3.5, m - 19, 7, 38); else g.strokeRect(m - 3, m - 18, 6, 36); };
+    const letter = (g, m, t, col, px = 17) => { g.fillStyle = col; g.font = `bold ${px}px -apple-system, Helvetica, Arial`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(t, m, m + 1); };
+    mk('ad-civil-p', (g, m) => { ring(g, m, 14, C.ad); bar(g, m, C.ad, true); });
+    mk('ad-civil-g', (g, m) => { ring(g, m, 14, C.ad); bar(g, m, C.ad, false); });
+    mk('ad-civil', (g, m) => { ring(g, m, 14, C.ad); g.beginPath(); g.arc(m, m, 5, 0, Math.PI * 2); g.fillStyle = C.ad; g.fill(); });
+    mk('ad-mil', (g, m) => { ring(g, m, 14, C.mil); for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2 + Math.PI / 4; g.beginPath(); g.moveTo(m + Math.cos(a) * 14, m + Math.sin(a) * 14); g.lineTo(m + Math.cos(a) * 21, m + Math.sin(a) * 21); g.lineWidth = 4; g.strokeStyle = C.mil; g.stroke(); } bar(g, m, C.mil, true); });
+    mk('ad-heli', (g, m) => { ring(g, m, 12, C.heli, 3); letter(g, m, 'H', C.heli); });
+    mk('ad-ulm', (g, m) => { ring(g, m, 12, C.ulm, 3.5); letter(g, m, 'U', C.ulm); });
+    mk('ad-glider', (g, m) => { ring(g, m, 12, C.glider, 3.5); letter(g, m, 'V', C.glider); });
+    mk('ad-water', (g, m) => { ring(g, m, 12, C.water, 3.5); letter(g, m, 'W', C.water, 15); });
+    mk('ad-closed', (g, m) => { ring(g, m, 12, C.closed, 3); g.beginPath(); g.moveTo(m - 8, m - 8); g.lineTo(m + 8, m + 8); g.moveTo(m + 8, m - 8); g.lineTo(m - 8, m + 8); g.lineWidth = 3; g.strokeStyle = C.closed; g.stroke(); });
+    const hex = (g, m, r) => { g.beginPath(); for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; g[k ? 'lineTo' : 'moveTo'](m + Math.cos(a) * r, m + Math.sin(a) * r); } g.closePath(); g.fillStyle = 'rgba(255,255,255,.85)'; g.fill(); g.lineWidth = 3; g.strokeStyle = C.nav; g.stroke(); g.beginPath(); g.arc(m, m, 2.5, 0, Math.PI * 2); g.fillStyle = C.nav; g.fill(); };
+    mk('nav-vor', (g, m) => hex(g, m, 12));
+    mk('nav-vordme', (g, m) => { g.lineWidth = 2.5; g.strokeStyle = C.nav; g.strokeRect(m - 15, m - 12, 30, 24); hex(g, m, 10); });
+    mk('nav-dme', (g, m) => { g.fillStyle = 'rgba(255,255,255,.85)'; g.fillRect(m - 11, m - 9, 22, 18); g.lineWidth = 3; g.strokeStyle = C.nav; g.strokeRect(m - 11, m - 9, 22, 18); g.beginPath(); g.arc(m, m, 2.5, 0, Math.PI * 2); g.fillStyle = C.nav; g.fill(); });
+    mk('nav-ndb', (g, m) => { g.fillStyle = C.nav; for (const r of [7, 12, 17]) { const n = Math.round(r * 1.1); for (let k = 0; k < n; k++) { const a = k / n * Math.PI * 2; g.beginPath(); g.arc(m + Math.cos(a) * r, m + Math.sin(a) * r, 1.6, 0, Math.PI * 2); g.fill(); } } g.beginPath(); g.arc(m, m, 3.5, 0, Math.PI * 2); g.fill(); });
+    const tri = (g, m, filled) => { g.beginPath(); g.moveTo(m, m - 11); g.lineTo(m + 10, m + 7); g.lineTo(m - 10, m + 7); g.closePath(); g.lineWidth = 3; g.strokeStyle = C.rpp; g.fillStyle = filled ? C.rpp : '#fff'; g.fill(); g.stroke(); };
+    mk('rpp-c', (g, m) => tri(g, m, true));
+    mk('rpp-o', (g, m) => tri(g, m, false));
+    mk('upt', (g, m) => { g.beginPath(); g.arc(m, m, 7, 0, Math.PI * 2); g.fillStyle = '#18a058'; g.fill(); g.lineWidth = 3; g.strokeStyle = '#fff'; g.stroke(); });
+  }
+  const adIcon = a => a.cat === 'civil' ? (a.hasRwy ? (a.paved ? 'ad-civil-p' : 'ad-civil-g') : 'ad-civil') : 'ad-' + a.cat;
+  const navIcon = v => /VOR.*DME|VORTAC|DVOR-DME|DVORTAC/.test(v.type) ? 'nav-vordme' : /VOR/.test(v.type) ? 'nav-vor' : /NDB/.test(v.type) ? 'nav-ndb' : 'nav-dme';
+
+  const ASP_COLOR = ['match', ['get', 'cat'], 'P', C.red, 'R', C.red, 'D', C.red, 'CTR', C.blue, 'TMA', C.blue, 'TMZ', C.grey, 'RMZ', C.grey, 'TRA', C.purple, 'GLD', C.yellow, 'SIV', C.green, C.orange];
+  const LABEL_PAINT = { 'text-color': '#2a1020', 'text-halo-color': 'rgba(255,255,255,.95)', 'text-halo-width': 1.6 };
 
   function initMap() {
     if (!window.maplibregl) {
@@ -171,64 +321,102 @@
     const last = LS.get('lastPos', { lon: 6.0, lat: 47.2, z: 8 });
     map = new maplibregl.Map({
       container: 'map', center: [last.lon, last.lat], zoom: last.z, attributionControl: { compact: true },
-      style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#dde3e8' } }] },
+      style: { version: 8, glyphs: GLYPHS, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#dde3e8' } }] },
       dragRotate: false, pitchWithRotate: false, touchPitch: false, maxPitch: 0
     });
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.ScaleControl({ unit: 'nautical' }), 'bottom-left');
+    map.on('styleimagemissing', () => {});
     map.on('load', () => {
       mapReady = true;
+      makeIcons();
       setBase();
-      for (const id of ['track-shown', 'trackline', 'route', 'leg', 'ads', 'navaids', 'userwps', 'wps']) map.addSource(id, { type: 'geojson', data: emptyFC() });
+      for (const id of ['asp', 'track-shown', 'trackline', 'route', 'leg', 'ads', 'navaids', 'rpp', 'userwps', 'wps']) map.addSource(id, { type: 'geojson', data: emptyFC() });
+      // Espaces aériens
+      map.addLayer({ id: 'asp-fill', type: 'fill', source: 'asp', paint: { 'fill-color': ASP_COLOR,
+        'fill-opacity': ['match', ['get', 'cat'], 'P', .16, 'R', .07, 'D', .04, 'CTR', .10, 'TMA', .025, .02] } });
+      map.addLayer({ id: 'asp-band', type: 'line', source: 'asp', filter: ['in', ['get', 'cat'], ['literal', ['P', 'R']]],
+        paint: { 'line-color': C.red, 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 3, 11, 9], 'line-opacity': .22 } });
+      map.addLayer({ id: 'asp-solid', type: 'line', source: 'asp', filter: ['in', ['get', 'cat'], ['literal', ['P', 'R', 'TMA', 'OTH']]],
+        paint: { 'line-color': ASP_COLOR, 'line-width': ['match', ['get', 'cat'], 'P', 2.5, 'R', 2, 'TMA', 1.6, 1.2] } });
+      map.addLayer({ id: 'asp-dash', type: 'line', source: 'asp', filter: ['in', ['get', 'cat'], ['literal', ['D', 'CTR']]],
+        paint: { 'line-color': ASP_COLOR, 'line-width': ['match', ['get', 'cat'], 'CTR', 2.6, 2], 'line-dasharray': [3, 1.6] } });
+      map.addLayer({ id: 'asp-dot', type: 'line', source: 'asp', filter: ['in', ['get', 'cat'], ['literal', ['TMZ', 'RMZ', 'TRA', 'GLD', 'SIV']]],
+        paint: { 'line-color': ASP_COLOR, 'line-width': 1.8, 'line-dasharray': [1, 1.5] } });
+      // Trace, route
       map.addLayer({ id: 'track-shown', type: 'line', source: 'track-shown', paint: { 'line-color': '#7a3cff', 'line-width': 3, 'line-opacity': .8 } });
       map.addLayer({ id: 'trackline', type: 'line', source: 'trackline', paint: { 'line-color': '#1e7fff', 'line-width': 3 } });
       map.addLayer({ id: 'route', type: 'line', source: 'route', paint: { 'line-color': '#ff2ea6', 'line-width': 4, 'line-opacity': .85 } });
       map.addLayer({ id: 'leg', type: 'line', source: 'leg', paint: { 'line-color': '#ffb020', 'line-width': 3, 'line-dasharray': [2, 1.5] } });
-      map.addLayer({ id: 'ads', type: 'circle', source: 'ads', paint: {
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, ['match', ['get', 'type'], 'small', 2.5, 4], 10, ['match', ['get', 'type'], 'small', 6, 8]],
-        'circle-color': ['match', ['get', 'type'], 'large', '#003e9c', 'medium', '#2060c0', '#a0007a'],
-        'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
-      map.addLayer({ id: 'navaids', type: 'circle', source: 'navaids', minzoom: 7, paint: { 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-color': '#0050b0', 'circle-stroke-width': 2.5 } });
-      map.addLayer({ id: 'userwps', type: 'circle', source: 'userwps', paint: { 'circle-radius': 5, 'circle-color': '#18a058', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 } });
+      // Symboles (icônes seules : s'affichent même si les polices ne chargent pas)
+      const iconLayout = (img, extra) => Object.assign({ 'icon-image': img, 'icon-allow-overlap': true, 'icon-ignore-placement': true }, extra || {});
+      map.addLayer({ id: 'rpp', type: 'symbol', source: 'rpp', minzoom: 8, layout: iconLayout(['case', ['get', 'comp'], 'rpp-c', 'rpp-o'], { 'icon-size': ['interpolate', ['linear'], ['zoom'], 8, .7, 11, 1] }) });
+      map.addLayer({ id: 'navaids', type: 'symbol', source: 'navaids', minzoom: 6.5, layout: iconLayout(['get', 'icon'], { 'icon-size': ['interpolate', ['linear'], ['zoom'], 6.5, .7, 10, 1] }) });
+      map.addLayer({ id: 'ads', type: 'symbol', source: 'ads', layout: iconLayout(['get', 'icon'], {
+        'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map',
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 5, .45, 8, .75, 11, 1.05] }),
+        filter: ['any', ['>=', ['zoom'], 8], ['==', ['get', 'major'], true]] });
+      map.addLayer({ id: 'userwps', type: 'symbol', source: 'userwps', layout: iconLayout('upt') });
       map.addLayer({ id: 'wps', type: 'circle', source: 'wps', paint: { 'circle-radius': 7, 'circle-color': '#ff2ea6', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+      // Étiquettes (polices)
+      map.addLayer({ id: 'asp-label', type: 'symbol', source: 'asp', minzoom: 8.5, filter: ['in', ['get', 'cat'], ['literal', ['P', 'R', 'D', 'CTR', 'TMA', 'TMZ', 'RMZ', 'TRA']]],
+        layout: { 'text-field': ['get', 'label'], 'text-font': FONT, 'text-size': 10.5, 'text-max-width': 12, 'symbol-placement': 'point', 'text-padding': 6 },
+        paint: { 'text-color': ASP_COLOR, 'text-halo-color': 'rgba(255,255,255,.95)', 'text-halo-width': 1.6 } });
+      map.addLayer({ id: 'ads-label', type: 'symbol', source: 'ads', minzoom: 8.5,
+        layout: { 'text-field': ['step', ['zoom'], ['get', 'code'], 9.8, ['get', 'lbl']], 'text-font': FONT, 'text-size': ['interpolate', ['linear'], ['zoom'], 8.5, 10.5, 11, 12.5],
+          'text-anchor': 'top', 'text-offset': [0, 1.15], 'text-max-width': 14, 'text-optional': true },
+        paint: Object.assign({}, LABEL_PAINT, { 'text-color': ['match', ['get', 'cat'], 'mil', C.mil, 'ulm', C.ulm, 'glider', C.glider, 'closed', C.closed, C.ad] }) });
+      map.addLayer({ id: 'navaids-label', type: 'symbol', source: 'navaids', minzoom: 8.5,
+        layout: { 'text-field': ['get', 'lbl'], 'text-font': FONT, 'text-size': 10.5, 'text-anchor': 'left', 'text-offset': [1.3, 0], 'text-optional': true },
+        paint: Object.assign({}, LABEL_PAINT, { 'text-color': C.nav }) });
+      map.addLayer({ id: 'rpp-label', type: 'symbol', source: 'rpp', minzoom: 9.5,
+        layout: { 'text-field': ['get', 'short'], 'text-font': FONT, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1, 0], 'text-optional': true }, paint: LABEL_PAINT });
+      map.addLayer({ id: 'userwps-label', type: 'symbol', source: 'userwps',
+        layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1, 0] }, paint: Object.assign({}, LABEL_PAINT, { 'text-color': '#106a3a' }) });
       refreshDataLayers(); refreshRoute();
       const el = document.createElement('div');
       el.innerHTML = '<svg class="plane" viewBox="0 0 40 40"><path d="M20 2l3 12 13 6v3l-13-3-1 10 5 4v2l-7-2-7 2v-2l5-4-1-10-13 3v-3l13-6z" fill="#ffd400" stroke="#000" stroke-width="1.5"/></svg>';
       planeMarker = new maplibregl.Marker({ element: el, rotationAlignment: 'map' }).setLngLat([last.lon, last.lat]);
       if (lastFix) placePlane(lastFix);
     });
-    map.on('moveend', () => {
-      const c = map.getCenter(); LS.set('lastPos', { lon: c.lng, lat: c.lat, z: map.getZoom() });
-      clearTimeout(labelT); labelT = setTimeout(refreshAdLabels, 400);
-    });
+    map.on('moveend', () => { const c = map.getCenter(); LS.set('lastPos', { lon: c.lng, lat: c.lat, z: map.getZoom() }); });
     map.on('dragstart', e => { if (e.originalEvent) setFollow(false); });
     map.on('click', e => {
       if (longPressFired) { longPressFired = false; return; }
       const bb = [[e.point.x - 14, e.point.y - 14], [e.point.x + 14, e.point.y + 14]];
-      const layers = ['wps', 'userwps', 'navaids', 'ads'].filter(l => map.getLayer(l));
+      const layers = ['wps', 'userwps', 'rpp', 'navaids', 'ads'].filter(l => map.getLayer(l));
       const f = map.queryRenderedFeatures(bb, { layers })[0];
-      if (f) pointSheet(featureToPoint(f));
+      if (f) return pointSheet(featureToPoint(f));
+      if (airspacesAt(e.point).length) freePointSheet(e.lngLat, e.point);
     });
     // Appui long → point libre
     let lpT = null, lpStart = null, longPressFired = false;
     const cancelLp = () => { clearTimeout(lpT); lpT = null; };
     map.on('touchstart', e => {
       if (e.originalEvent.touches.length !== 1) return cancelLp();
-      lpStart = e.point; const ll = e.lngLat;
-      lpT = setTimeout(() => { longPressFired = true; freePointSheet(ll); setTimeout(() => longPressFired = false, 800); }, 600);
+      lpStart = e.point; const ll = e.lngLat, pt = e.point;
+      lpT = setTimeout(() => { longPressFired = true; freePointSheet(ll, pt); setTimeout(() => longPressFired = false, 800); }, 600);
     });
     map.on('touchmove', e => { if (lpStart && (Math.abs(e.point.x - lpStart.x) > 10 || Math.abs(e.point.y - lpStart.y) > 10)) cancelLp(); });
     map.on('touchend', cancelLp); map.on('touchcancel', cancelLp);
-    map.on('contextmenu', e => freePointSheet(e.lngLat));
+    map.on('contextmenu', e => freePointSheet(e.lngLat, e.point));
+  }
+
+  function airspacesAt(point) {
+    if (!map || !map.getLayer('asp-fill')) return [];
+    const seen = new Set();
+    return map.queryRenderedFeatures(point, { layers: ['asp-fill'] }).map(f => f.properties)
+      .filter(p => { const k = p.name + p.lower; if (seen.has(k)) return false; seen.add(k); return true; })
+      .sort((a, b) => a.lowerFt - b.lowerFt);
   }
 
   function setBase() {
     if (!map || !mapReady) return;
-    const before = map.getLayer('track-shown') ? 'track-shown' : undefined;
+    const before = map.getLayer('asp-fill') ? 'asp-fill' : undefined;
     for (const id of ['oaip', 'base']) { if (map.getLayer(id)) map.removeLayer(id); if (map.getSource(id)) map.removeSource(id); }
     const b = baseDef();
-    map.addSource('base', { type: 'raster', tiles: b.tiles, tileSize: 256, maxzoom: b.maxzoom, attribution: b.attribution });
-    map.addLayer({ id: 'base', type: 'raster', source: 'base' }, before);
+    map.addSource('base', { type: 'raster', tiles: b.tiles, tileSize: 256, maxzoom: b.maxzoom, attribution: b.attribution + ' | Données aéro © openAIP' });
+    map.addLayer({ id: 'base', type: 'raster', source: 'base', paint: { 'raster-saturation': S.base === 'otm' ? -0.25 : 0 } }, before);
     if (S.oaipOn && S.oaip) {
       map.addSource('oaip', { type: 'raster', tiles: [oaipUrl()], tileSize: 256, maxzoom: 14, attribution: '© openAIP' });
       map.addLayer({ id: 'oaip', type: 'raster', source: 'oaip' }, before);
@@ -237,31 +425,33 @@
 
   function featureToPoint(f) {
     const p = f.properties, [lon, lat] = f.geometry.coordinates;
-    if (f.layer.id === 'ads') { const a = airports.find(x => x.id === p.id); if (a) return { ...a, kind: 'ad' }; }
-    if (f.layer.id === 'navaids') { const v = navaids.find(x => x.id === p.id && Math.abs(x.lat - lat) < 1e-4); if (v) return { ...v, kind: 'navaid' }; }
-    if (f.layer.id === 'userwps') { const u = userWps.find(x => x.id === p.id); if (u) return { ...u, kind: 'user' }; }
+    const lid = f.layer.id;
+    if (lid === 'ads') { const a = airports.find(x => x.key === p.key); if (a) return { ...a, kind: 'ad' }; }
+    if (lid === 'navaids') { const v = navaids.find(x => x.key === p.key); if (v) return { ...v, kind: 'navaid' }; }
+    if (lid === 'rpp') { const r = rpps.find(x => x.key === p.key); if (r) return { ...r, kind: 'rpp' }; }
+    if (lid === 'userwps') { const u = userWps.find(x => x.id === p.id); if (u) return { ...u, kind: 'user' }; }
     return { name: p.name, lat, lon, kind: 'wp', idx: p.idx };
   }
 
   function refreshDataLayers() {
     if (!map || !map.getSource('ads')) return;
-    map.getSource('ads').setData({ type: 'FeatureCollection', features: airports.map(a => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [a.lon, a.lat] }, properties: { id: a.id, type: a.type } })) });
-    map.getSource('navaids').setData({ type: 'FeatureCollection', features: navaids.map(v => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [v.lon, v.lat] }, properties: { id: v.id } })) });
-    map.getSource('userwps').setData({ type: 'FeatureCollection', features: userWps.map(u => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [u.lon, u.lat] }, properties: { id: u.id } })) });
-    refreshAdLabels();
+    const ads = airports.filter(a => S.heliOn || a.cat !== 'heli');
+    map.getSource('ads').setData(fc(ads, ptGeom, a => {
+      const code = a.icao || a.id;
+      const l2 = [a.pfreq, a.elev !== null && a.elev !== undefined ? a.elev + ' ft' : ''].filter(Boolean).join(' · ');
+      return { key: a.key, icon: adIcon(a), rot: a.cat === 'civil' || a.cat === 'mil' ? a.rhdg : 0, cat: a.cat, code,
+        lbl: code + (a.name && fold(a.name) !== fold(code) ? ' ' + a.name : '') + (l2 ? '\n' + l2 : '') + (a.ppr ? ' PPR' : ''),
+        major: a.type === 3 || a.type === 0 || a.type === 9 };
+    }));
+    map.getSource('navaids').setData(fc(navaids, ptGeom, v => ({ key: v.key, icon: navIcon(v), lbl: `${v.name} ${v.id}\n${v.freqTxt || ''}` })));
+    map.getSource('rpp').setData(fc(S.rppOn ? rpps : [], ptGeom, r => ({ key: r.key, comp: r.comp, short: r.short })));
+    map.getSource('userwps').setData(fc(userWps, ptGeom, u => ({ id: u.id, name: u.name })));
+    const asp = S.aspOn ? airspaces.filter(a => a.lowerFt < S.aspMaxFloor && (S.sivOn || a.cat !== 'SIV')) : [];
+    map.getSource('asp').setData(fc(asp, a => a.geometry, a => ({
+      name: a.name, cat: a.cat, cls: a.cls, lower: a.lower, upper: a.upper, lowerFt: a.lowerFt, freq: a.freq, notam: a.notam,
+      label: `${a.name}${a.cls && a.cat !== 'P' && a.cat !== 'R' && a.cat !== 'D' ? ' (' + a.cls + ')' : ''}\n${a.upper}\n${a.lower}` })));
   }
-  function refreshAdLabels() {
-    adLabelMarkers.forEach(m => m.remove()); adLabelMarkers = [];
-    if (!map || map.getZoom() < 8.5) return;
-    const b = map.getBounds(); let n = 0;
-    const list = [...airports.map(a => ({ t: a.icao || a.id, lat: a.lat, lon: a.lon })), ...userWps.map(u => ({ t: u.name, lat: u.lat, lon: u.lon }))];
-    for (const a of list) {
-      if (!b.contains([a.lon, a.lat])) continue;
-      if (++n > 120) break;
-      const el = document.createElement('div'); el.className = 'adlabel'; el.textContent = a.t;
-      adLabelMarkers.push(new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([a.lon, a.lat]).addTo(map));
-    }
-  }
+  const refreshAdLabels = () => {};
 
   function activeWps() {
     if (nav.mode === 'plan') { const p = getPlan(nav.planId); return p ? p.wps : []; }
@@ -290,19 +480,30 @@
   }
 
   /* ---------- Feuilles d'action sur un point ---------- */
+  const ASP_TXT = { P: 'Zone interdite', R: 'Zone réglementée', D: 'Zone dangereuse', CTR: 'CTR', TMA: 'TMA / CTA', TMZ: 'TMZ', RMZ: 'RMZ', TRA: 'TRA / TSA', GLD: 'Secteur vol à voile', SIV: 'SIV', OTH: 'Zone' };
+  function airspaceList(list) {
+    if (!list.length) return '';
+    return '<p class="hint"><b>Espaces aériens ici</b></p>' + list.map(a =>
+      `<div class="asp asp-${a.cat}"><b>${esc(a.name)}</b>${a.cls ? ` <span class="tag">classe ${a.cls}</span>` : ''}<br>
+       <small>${ASP_TXT[a.cat] || ''} · plafond ${esc(a.upper)} · plancher ${esc(a.lower)}${a.notam ? ' · activation NOTAM' : ''}${a.freq ? '<br>' + esc(a.freq) : ''}</small></div>`).join('');
+  }
   function pointInfo(p) {
-    let h = `<h3>${esc(ptLabel(p))}</h3><p class="hint">${N.fmtCoord(p.lat, p.lon)}`;
+    let h = `<h3>${esc(ptLabel(p))}</h3>`;
+    if (p.kind === 'ad' && AD_TYPE_TXT[p.type] !== undefined) h += `<p class="hint">${AD_TYPE_TXT[p.type]}${p.ppr ? ' · PPR' : ''}${p.priv ? ' · privé' : ''}</p>`;
+    h += `<p class="hint">${N.fmtCoord(p.lat, p.lon)}`;
     if (p.elev !== null && p.elev !== undefined) h += ` · Alt. ${p.elev} ft`;
     if (p.city) h += ` · ${esc(p.city)}`;
-    if (p.kind === 'navaid' && p.freq) h += ` · ${(+p.freq >= 10000 ? (p.freq / 1000).toFixed(2) + ' MHz' : p.freq + ' kHz')}`;
+    if (p.kind === 'navaid' && p.freqTxt) h += ` · ${esc(p.freqTxt)}`;
     if (lastFix) h += `<br>Depuis l'avion : ${N.fmtHdg(N.bearing(lastFix.lat, lastFix.lon, p.lat, p.lon))} vrai, ${N.distNM(lastFix.lat, lastFix.lon, p.lat, p.lon).toFixed(1)} NM`;
     h += '</p>';
-    if (p.freqs && p.freqs.length) h += '<p class="hint">' + p.freqs.map(f => `${esc(f.t)} ${esc(f.f)}${f.d ? ' <small>(' + esc(f.d) + ')</small>' : ''}`).join('<br>') + '</p>';
+    if (p.rwys && p.rwys.length) h += '<p class="hint">Pistes : ' + p.rwys.map(r => `${esc(r.des)}${r.len ? ' ' + r.len + ' m' : ''} ${SURF_TXT(r.surf)}`).join(' · ') + '</p>';
+    if (p.freqs && p.freqs.length) h += '<p class="hint">' + p.freqs.map(f => `${esc(f.t)} ${esc(f.f)}`).join('<br>') + '</p>';
     return h;
   }
   function pointSheet(p) {
     const inPlan = p.kind === 'wp';
     let h = pointInfo(p);
+    try { if (map && mapReady) h += airspaceList(airspacesAt(map.project([p.lon, p.lat]))); } catch (e) { /* ignore */ }
     h += `<button class="opt" data-a="direct">D→ Direct To</button>`;
     if (!inPlan) h += `<button class="opt" data-a="add">+ Ajouter à la fin du vol « ${esc(curPlan().name)} »</button>`;
     if (p.kind === 'coord' || p.kind === 'free') h += `<button class="opt" data-a="save">★ Enregistrer comme point perso</button>`;
@@ -316,7 +517,7 @@
       closeSheet();
     }));
   }
-  const freePointSheet = ll => pointSheet({ name: 'Point ' + N.fmtCoord(ll.lat, ll.lng), lat: ll.lat, lon: ll.lng, kind: 'free' });
+  const freePointSheet = (ll) => pointSheet({ name: 'Point ' + N.fmtCoord(ll.lat, ll.lng), lat: ll.lat, lon: ll.lng, kind: 'free' });
 
   function directToSheet() {
     let h = '<h3>Direct To</h3><input id="dt-q" placeholder="Rechercher un terrain, balise, point…" autocomplete="off"><div id="dt-res"></div>';
@@ -756,6 +957,7 @@
     $('#s-alert').checked = S.alertOn; $('#s-alertsec').value = S.alertSec; $('#s-alertval').textContent = alertTxt(S.alertSec);
     $('#s-alertsec').disabled = !S.alertOn;
     $('#s-clock').value = S.clock; $('#s-theme').value = S.theme; $('#s-wake').checked = S.wake; $('#s-autorec').checked = S.autorec;
+    $('#s-aspon').checked = S.aspOn; $('#s-aspfloor').value = String(S.aspMaxFloor); $('#s-sivon').checked = S.sivOn; $('#s-rppon').checked = S.rppOn; $('#s-helion').checked = S.heliOn;
     $('#s-base').value = S.base; $('#s-custom').value = S.custom; $('#s-oaip').value = S.oaip; $('#s-oaipon').checked = S.oaipOn; $('#s-zmax').value = String(S.zmax);
     renderDataInfo();
     $('#s-userwps').innerHTML = userWps.length ? userWps.map(u => `<div class="row"><span class="lbl">${esc(u.name)} <small class="hint">${N.fmtCoord(u.lat, u.lon)}</small></span><button class="sm danger" data-u="${u.id}">✕</button></div>`).join('')
@@ -771,6 +973,11 @@
   bindS('#s-wake', 'wake', t => t.checked, wake);
   bindS('#s-autorec', 'autorec', t => t.checked);
   bindS('#s-base', 'base', t => t.value, setBase);
+  bindS('#s-aspon', 'aspOn', t => t.checked, refreshDataLayers);
+  bindS('#s-aspfloor', 'aspMaxFloor', t => +t.value, refreshDataLayers);
+  bindS('#s-sivon', 'sivOn', t => t.checked, refreshDataLayers);
+  bindS('#s-rppon', 'rppOn', t => t.checked, refreshDataLayers);
+  bindS('#s-helion', 'heliOn', t => t.checked, refreshDataLayers);
   bindS('#s-custom', 'custom', t => t.value.trim(), setBase);
   bindS('#s-oaip', 'oaip', t => t.value.trim(), setBase);
   bindS('#s-oaipon', 'oaipOn', t => t.checked, setBase);
@@ -779,7 +986,7 @@
   $('#s-sim').onclick = toggleSim;
 
   /* Cartes hors ligne */
-  const tileKey = u => u.replace(/:\/\/[abc]\.tile\.opentopomap\.org/, '://tile.opentopomap.org');
+  const tileKey = u => u.replace(/:\/\/[abc]\.tile\.opentopomap\.org/, '://tile.opentopomap.org').replace(/:\/\/[abcd]\.basemaps\.cartocdn\.com/, '://basemaps.cartocdn.com');
   function tileTemplates() {
     const b = baseDef(), out = [b.tiles[0]];
     if (S.oaipOn && S.oaip) out.push(oaipUrl());

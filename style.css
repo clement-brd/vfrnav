@@ -136,3 +136,9 @@ table.kv tr.tot td { font-weight: 800; }
 .sheet-inner .opt small { color: var(--mute); margin-left: auto; font-weight: 400; }
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--tabh) + var(--safe-b) + 80px); z-index: 40;
   background: #000c; color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 15px; max-width: 90%; text-align: center; }
+
+.asp { border-left: 4px solid #e07b00; padding: 4px 8px; margin: 4px 0; background: var(--panel2); border-radius: 6px; font-size: 14px; }
+.asp small { color: var(--mute); }
+.asp-P, .asp-R, .asp-D { border-color: #d0021b; } .asp-CTR, .asp-TMA { border-color: #1a57b5; }
+.asp-TMZ, .asp-RMZ { border-color: #444; } .asp-TRA { border-color: #7b3fa0; } .asp-SIV { border-color: #2f8f4e; }
+.sheet-inner .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--line); }
