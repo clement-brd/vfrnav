@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.6.0';
+  const VERSION = '1.7.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -80,8 +80,7 @@
     document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
     if (v === 'map' && map) setTimeout(() => map.resize(), 50);
     if (v === 'prep') renderPrep();
-    if (v === 'fleet') renderFleet();
-    if (v === 'tracks') renderTracks();
+    if (v === 'fleet') { renderFleet(); renderTracks(); }
     if (v === 'settings') renderSettings();
   }
   document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => showView(b.dataset.view));
@@ -550,16 +549,33 @@
     if (code && typeof wxBlock === 'function') h += wxBlock(code);
     return h;
   }
+  /* Cartes VAC (SIA) : cycle AIRAC de 28 jours, référence 06 AUG 2026 */
+  const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  function airacDate(offset = 0, now = new Date()) {
+    const ref = Date.UTC(2026, 7, 6), cyc = 28 * 86400000;
+    const n = Math.floor((now.getTime() - ref) / cyc) + offset;
+    return new Date(ref + n * cyc);
+  }
+  function vacUrl(icao, offset = 0) {
+    const d = airacDate(offset);
+    const tag = String(d.getUTCDate()).padStart(2, '0') + '_' + MONTHS[d.getUTCMonth()] + '_' + d.getUTCFullYear();
+    return `https://www.sia.aviation-civile.gouv.fr/media/dvd/eAIP_${tag}/Atlas-VAC/PDF_AIPparSSection/VAC/AD/AD-2.${icao}.pdf`;
+  }
+  const hasVac = code => /^LF[A-Z]{2}$/.test(code || '');
+  const openUrl = u => window.open(u, '_blank');
   function pointSheet(p) {
     const inPlan = p.kind === 'wp';
     let h = pointInfo(p);
     try { if (map && mapReady) h += airspaceList(airspacesAt(map.project([p.lon, p.lat]))); } catch (e) { /* ignore */ }
+    const vcode = (p.icao || (p.kind === 'wp' ? p.name : '') || '').toUpperCase();
+    if (hasVac(vcode)) h += `<button class="opt" data-a="vac">📄 Carte VAC ${esc(vcode)}<small>SIA, cycle du ${airacDate().toLocaleDateString('fr-FR')}</small></button>`;
     h += `<button class="opt" data-a="direct">D→ Direct To</button>`;
     if (!inPlan) h += `<button class="opt" data-a="add">+ Ajouter à la fin du vol « ${esc(curPlan().name)} »</button>`;
     if (p.kind === 'coord' || p.kind === 'free') h += `<button class="opt" data-a="save">★ Enregistrer comme point perso</button>`;
     if (p.kind === 'user') h += `<button class="opt" data-a="deluser">Supprimer ce point perso</button>`;
     sheet(h, root => root.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
       const a = b.dataset.a;
+      if (a === 'vac') { openUrl(vacUrl(vcode)); return; }
       if (a === 'direct') { if (inPlan) startPlanAt(p.idx, nav.mode === 'plan' ? nav.planId : activePlanId); else directTo(p); }
       if (a === 'add') { curPlan().wps.push(toWp(p)); savePlans(); refreshRoute(); toast('Ajouté : ' + ptShort(p)); }
       if (a === 'save') { const name = prompt('Nom du point', 'PT' + (userWps.length + 1)); if (name) { userWps.push({ id: uid(), name, lat: p.lat, lon: p.lon }); saveUserWps(); refreshDataLayers(); toast('Point perso enregistré'); } }
@@ -817,7 +833,8 @@
   let rec = null, recSaveCount = 0, slowSince = null;
   function startRec(auto) {
     rec = { id: uid(), start: Date.now(), auto: !!auto, pts: [], done: false, name: '' };
-    const p = nav.mode === 'plan' ? getPlan(nav.planId) : null; rec.name = p ? p.name : 'Vol du ' + new Date().toLocaleDateString('fr-FR');
+    const p = nav.mode === 'plan' ? getPlan(nav.planId) : null;
+    rec.acId = (p || curPlan() || {}).acId || null; rec.name = p ? p.name : 'Vol du ' + new Date().toLocaleDateString('fr-FR');
     $('#b-rec').classList.add('rec'); $('#b-rec').textContent = '■ STOP';
     toast(auto ? 'Décollage détecté — trace en cours' : 'Enregistrement de la trace');
     IDB.putTrack(rec);
@@ -865,8 +882,8 @@
   async function renderTracks() {
     const list = (await IDB.allTracks()).sort((a, b) => b.start - a.start);
     const el = $('#t-list');
-    if (!list.length) { el.innerHTML = '<p class="hint">Aucune trace. Appuie sur ● REC sur la carte, ou laisse le démarrage automatique au décollage.</p>'; return; }
-    el.innerHTML = list.map(t => { const s = trackStats(t); return `<div class="item"><div class="info"><b>${esc(t.name)}</b>${t.done ? '' : '<span class="tag">en cours</span>'}
+    if (!list.length) { el.innerHTML = '<p class="hint">Aucune trace. Elles s\'enregistrent automatiquement au décollage, ou avec ● REC sur la carte.</p>'; return; }
+    el.innerHTML = list.map(t => { const s = trackStats(t); const ac = fleet.find(a => a.id === t.acId); return `<div class="item"><div class="info"><b>${esc(t.name)}</b>${ac ? `<span class="tag">${esc(ac.reg)}</span>` : ''}${t.done ? '' : '<span class="tag">en cours</span>'}
       <small>${new Date(t.start).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })} · ${N.fmtDur(s.dur)} · ${s.d.toFixed(1)} NM · max ${s.maxAlt.toLocaleString('fr-FR')} ft</small></div>
       <button class="sm ghost" data-show="${t.id}">Voir</button><button class="sm ghost" data-gpx="${t.id}">GPX</button><button class="sm danger" data-del="${t.id}">✕</button></div>`; }).join('');
     const byId = id => list.find(t => t.id === id);
@@ -878,7 +895,7 @@
       map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: { top: 180, bottom: 60, left: 40, right: 90 }, bearing: 0 });
     });
     el.querySelectorAll('[data-gpx]').forEach(b => b.onclick = () => { const t = byId(b.dataset.gpx); shareFile(`trace-${new Date(t.start).toISOString().slice(0, 16).replace(/[:T]/g, '-')}.gpx`, trackGpx(t), 'application/gpx+xml'); });
-    el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (rec && rec.id === b.dataset.del) return toast('Trace en cours d\'enregistrement'); if (confirm('Supprimer cette trace ?')) { await IDB.delTrack(b.dataset.del); renderTracks(); } });
+    el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (rec && rec.id === b.dataset.del) return toast('Trace en cours d\'enregistrement'); if (confirm('Supprimer cette trace ?')) { await IDB.delTrack(b.dataset.del); renderTracks(); renderFleet(); } });
   }
 
   /* ---------- Préparation ---------- */
@@ -979,9 +996,14 @@
 
   /* ---------- Flotte ---------- */
   let editAc = null;
-  function renderFleet() {
-    $('#f-list').innerHTML = fleet.map(a => `<div class="item"><div class="info"><b>${esc(a.reg)}</b><span class="tag">${a.type === 'ulm' ? 'ULM' : 'Avion'}</span>
-      <small>${esc(a.name)} · ${a.tas} kt · ${a.conso} L/h · ${a.capacity || '?'} L · réserve ${a.reserveMin} min</small></div><button class="sm ghost" data-e="${a.id}">Modifier</button></div>`).join('')
+  async function renderFleet() {
+    let tracks = [];
+    try { tracks = await IDB.allTracks(); } catch (e) { /* rien */ }
+    const tot = {};
+    tracks.forEach(t => { if (!t.acId) return; const s = trackStats(t); tot[t.acId] = tot[t.acId] || { n: 0, min: 0 }; tot[t.acId].n++; tot[t.acId].min += s.dur; });
+    $('#f-list').innerHTML = fleet.map(a => { const t = tot[a.id]; return `<div class="item"><div class="info"><b>${esc(a.reg)}</b><span class="tag">${a.type === 'ulm' ? 'ULM' : 'Avion'}</span>
+      <small>${esc(a.name)} · ${a.tas} kt · ${a.conso} L/h · ${a.capacity || '?'} L · réserve ${a.reserveMin} min</small>
+      ${t ? `<small>${t.n} vol${t.n > 1 ? 's' : ''} enregistré${t.n > 1 ? 's' : ''} · ${N.fmtDur(t.min)}</small>` : ''}</div><button class="sm ghost" data-e="${a.id}">Modifier</button></div>`; }).join('')
       || '<p class="hint">Aucun appareil.</p>';
     $('#f-list').querySelectorAll('[data-e]').forEach(b => b.onclick = () => openAc(fleet.find(a => a.id === b.dataset.e)));
   }
@@ -1167,13 +1189,16 @@
   function renderWx() {
     const el = $('#p-wx'); if (!el) return;
     const p = curPlan();
-    if (!meteo.updated) { el.innerHTML = '<p class="hint">Pas encore de météo. Touche « Actualiser la météo » (réseau requis).</p>'; return; }
+    if (!meteo.updated) { meteo.metars = meteo.metars || {}; meteo.tafs = meteo.tafs || {}; }
     const { own, near } = routeStations(p.wps);
-    let h = `<p class="hint">METAR/TAF NOAA — mis à jour ${ageTxt(meteo.updated)}</p>`;
-    if (!own.length && !near.length) h += '<p class="hint">Aucune station météo sur ou près de la route (20 NM).</p>';
+    let h = meteo.updated ? `<p class="hint">METAR/TAF NOAA — mis à jour ${ageTxt(meteo.updated)}</p>` : '<p class="hint">Pas encore de météo. Touche « Actualiser la météo » (réseau requis).</p>';
+    if (meteo.updated && !own.length && !near.length) h += '<p class="hint">Aucune station météo sur ou près de la route (20 NM).</p>';
     own.forEach(id => h += wxBlock(id));
     if (near.length) { h += '<p class="hint"><b>Stations proches de la route</b></p>'; near.forEach(id => h += wxBlock(id)); }
+    const vacs = [...new Set(p.wps.map(w => (w.name || '').toUpperCase()).filter(hasVac))];
+    if (vacs.length) h += '<p class="hint"><b>Cartes VAC du vol</b> (enregistre-les dans Fichiers avant de partir pour les avoir hors ligne)</p><div class="row">' + vacs.map(c => `<button class="sm ghost" data-vac="${c}">📄 ${c}</button>`).join('') + '</div>';
     el.innerHTML = h;
+    el.querySelectorAll('[data-vac]').forEach(b => b.onclick = () => openUrl(vacUrl(b.dataset.vac)));
   }
   function refreshWxLayer() {
     if (!map || !map.getSource('wx')) return;
