@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.5.0';
+  const VERSION = '1.6.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -36,7 +36,7 @@
   /* ---------- État ---------- */
   const DEF_SETTINGS = { alertOn: true, alertSec: 60, clock: 'local', theme: 'dark', wake: true, autorec: true,
     base: 'oaci', ignKey: 'ign_scan_ws', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
-    aspOn: true, aspMaxFloor: 11500, sivOn: false, rppOn: true, heliOn: false };
+    aspOn: true, aspMaxFloor: 11500, sivOn: false, rppOn: true, heliOn: false, wxOn: true, radarOn: false };
   const S = Object.assign({}, DEF_SETTINGS, LS.get('settings', {}));
   if (S.base === 'light' || S.base === 'voyager') S.base = 'ign'; // anciens fonds Carto (clé désormais requise)
   if (!S.oaciV15) { S.base = 'oaci'; if (!S.ignKey) S.ignKey = 'ign_scan_ws'; S.oaciV15 = true; LS.set('settings', S); } // passage à la carte OACI par défaut
@@ -335,7 +335,7 @@
       mapReady = true;
       makeIcons();
       setBase();
-      for (const id of ['asp', 'track-shown', 'trackline', 'route', 'leg', 'ads', 'navaids', 'rpp', 'userwps', 'wps']) map.addSource(id, { type: 'geojson', data: emptyFC() });
+      for (const id of ['asp', 'track-shown', 'trackline', 'route', 'leg', 'ads', 'navaids', 'rpp', 'userwps', 'wps', 'wx']) map.addSource(id, { type: 'geojson', data: emptyFC() });
       // Espaces aériens
       map.addLayer({ id: 'asp-fill', type: 'fill', source: 'asp', paint: { 'fill-color': ASP_COLOR,
         'fill-opacity': ['match', ['get', 'cat'], 'P', .10, 'R', .025, 'D', .015, 'CTR', .06, 'TMA', .012, .01] } });
@@ -362,6 +362,8 @@
         'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map',
         'icon-size': ['interpolate', ['linear'], ['zoom'], 5, .45, 8, .75, 11, 1.05] }),
         filter: ['any', ['>=', ['zoom'], 8], ['==', ['get', 'major'], true]] });
+      map.addLayer({ id: 'wx', type: 'circle', source: 'wx', minzoom: 6, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 3.5, 10, 6], 'circle-color': ['get', 'color'],
+        'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5, 'circle-translate': [11, -11], 'circle-translate-anchor': 'viewport' } });
       map.addLayer({ id: 'userwps', type: 'symbol', source: 'userwps', layout: iconLayout('upt') });
       map.addLayer({ id: 'wps', type: 'circle', source: 'wps', paint: { 'circle-radius': 7, 'circle-color': '#ff2ea6', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
       // Étiquettes (polices)
@@ -379,7 +381,7 @@
         layout: { 'text-field': ['get', 'short'], 'text-font': FONT, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1, 0], 'text-optional': true }, paint: LABEL_PAINT });
       map.addLayer({ id: 'userwps-label', type: 'symbol', source: 'userwps',
         layout: { 'text-field': ['get', 'name'], 'text-font': FONT, 'text-size': 11, 'text-anchor': 'left', 'text-offset': [1, 0] }, paint: Object.assign({}, LABEL_PAINT, { 'text-color': '#106a3a' }) });
-      refreshDataLayers(); refreshRoute();
+      refreshDataLayers(); refreshRoute(); refreshWxLayer(); setRadar();
       applyOverlayMode(S.base === 'oaci' && !!S.ignKey);
       const el = document.createElement('div');
       el.innerHTML = '<svg class="plane" viewBox="0 0 40 40"><path d="M20 2l3 12 13 6v3l-13-3-1 10 5 4v2l-7-2-7 2v-2l5-4-1-10-13 3v-3l13-6z" fill="#ffd400" stroke="#000" stroke-width="1.5"/></svg>';
@@ -393,7 +395,7 @@
     map.on('click', e => {
       if (longPressFired) { longPressFired = false; return; }
       const bb = [[e.point.x - 14, e.point.y - 14], [e.point.x + 14, e.point.y + 14]];
-      const layers = ['wps', 'userwps', 'rpp', 'navaids', 'ads'].filter(l => map.getLayer(l));
+      const layers = ['wps', 'userwps', 'wx', 'rpp', 'navaids', 'ads'].filter(l => map.getLayer(l));
       const f = map.queryRenderedFeatures(bb, { layers })[0];
       if (f) return pointSheet(featureToPoint(f));
       if (airspacesAt(e.point).length) freePointSheet(e.lngLat, e.point);
@@ -451,12 +453,30 @@
     }
   }
 
+  let radarT = null;
+  async function setRadar() {
+    if (!map || !mapReady) return;
+    if (map.getLayer('radar')) map.removeLayer('radar'); if (map.getSource('radar')) map.removeSource('radar');
+    clearTimeout(radarT);
+    if (!S.radarOn) return;
+    try {
+      const d = await (await fetch('https://api.rainviewer.com/public/weather-maps.json', { cache: 'no-store' })).json();
+      const fr = d.radar && d.radar.past && d.radar.past[d.radar.past.length - 1];
+      if (!fr) throw new Error('vide');
+      if (map.getSource('radar')) return;
+      map.addSource('radar', { type: 'raster', tiles: [`${d.host}${fr.path}/256/{z}/{x}/{y}/2/1_1.png`], tileSize: 256, maxzoom: 7, attribution: 'Radar © RainViewer' });
+      map.addLayer({ id: 'radar', type: 'raster', source: 'radar', paint: { 'raster-opacity': .55 } }, map.getLayer('asp-fill') ? 'asp-fill' : undefined);
+      $('#gpsstatus').title = 'Radar ' + new Date(fr.time * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      radarT = setTimeout(setRadar, 10 * 60000);
+    } catch (e) { toast('Radar pluie indisponible (réseau ?)'); }
+  }
   function featureToPoint(f) {
     const p = f.properties, [lon, lat] = f.geometry.coordinates;
     const lid = f.layer.id;
     if (lid === 'ads') { const a = airports.find(x => x.key === p.key); if (a) return { ...a, kind: 'ad' }; }
     if (lid === 'navaids') { const v = navaids.find(x => x.key === p.key); if (v) return { ...v, kind: 'navaid' }; }
     if (lid === 'rpp') { const r = rpps.find(x => x.key === p.key); if (r) return { ...r, kind: 'rpp' }; }
+    if (lid === 'wx') { const a = airports.find(x => x.icao === p.id); if (a) return { ...a, kind: 'ad' }; return { name: p.id, icao: p.id, lat, lon, kind: 'coord' }; }
     if (lid === 'userwps') { const u = userWps.find(x => x.id === p.id); if (u) return { ...u, kind: 'user' }; }
     return { name: p.name, lat, lon, kind: 'wp', idx: p.idx };
   }
@@ -526,6 +546,8 @@
     h += '</p>';
     if (p.rwys && p.rwys.length) h += '<p class="hint">Pistes : ' + p.rwys.map(r => `${esc(r.des)}${r.len ? ' ' + r.len + ' m' : ''} ${SURF_TXT(r.surf)}`).join(' · ') + '</p>';
     if (p.freqs && p.freqs.length) h += '<p class="hint">' + p.freqs.map(f => `${esc(f.t)} ${esc(f.f)}`).join('<br>') + '</p>';
+    const code = (p.icao || p.id || '').toUpperCase();
+    if (code && typeof wxBlock === 'function') h += wxBlock(code);
     return h;
   }
   function pointSheet(p) {
@@ -869,7 +891,8 @@
     $('#p-ac').innerHTML = fleet.map(a => `<option value="${a.id}" ${a.id === p.acId ? 'selected' : ''}>${esc(a.reg)} — ${esc(a.name)}${a.type === 'ulm' ? ' (ULM)' : ''}</option>`).join('') || '<option>Ajoute un appareil dans Flotte</option>';
     $('#p-wdir').value = p.wind.dir; $('#p-wspd').value = p.wind.spd;
     $('#p-onboard').value = p.onboard; $('#p-extra').value = p.extraMin;
-    renderWps(); renderLog();
+    $('#p-dep').value = p.depTime || ''; $('#p-cruise').value = p.cruiseAlt || '';
+    renderWps(); renderLog(); renderWx();
   }
   function renderWps() {
     const p = curPlan(), el = $('#p-wps');
@@ -886,7 +909,7 @@
       const i = +inp.closest('.wp').dataset.i; p.wps[i][inp.dataset.f] = numOrEmpty(inp.value); savePlans(); renderLog();
     });
   }
-  function planChanged() { savePlans(); renderWps(); renderLog(); refreshRoute(); }
+  function planChanged() { savePlans(); renderWps(); renderLog(); renderWx(); refreshRoute(); }
   function renderLog() {
     const p = curPlan(), ac = getAc(p.acId);
     const log = N.computeLog(p.wps, ac, { dir: +p.wind.dir || 0, spd: +p.wind.spd || 0 });
@@ -932,6 +955,13 @@
   $('#p-wspd').onchange = e => { curPlan().wind.spd = numOrEmpty(e.target.value); savePlans(); renderLog(); };
   $('#p-onboard').onchange = e => { curPlan().onboard = numOrEmpty(e.target.value); savePlans(); renderLog(); };
   $('#p-extra').onchange = e => { curPlan().extraMin = numOrEmpty(e.target.value); savePlans(); renderLog(); };
+  $('#p-dep').onchange = e => { curPlan().depTime = e.target.value; savePlans(); };
+  $('#p-cruise').onchange = e => { curPlan().cruiseAlt = numOrEmpty(e.target.value); savePlans(); };
+  $('#p-wind').onclick = forecastWinds;
+  $('#p-wxrefresh').onclick = () => loadMeteo('manual');
+  $('#p-sofia').onclick = () => { const r = routeString(curPlan()); if (r) copyText(r); window.open('https://sofia-briefing.aviation-civile.gouv.fr/', '_blank'); };
+  $('#p-aeroweb').onclick = () => window.open('https://aviation.meteo.fr/', '_blank');
+  $('#p-copyroute').onclick = () => copyText(routeString(curPlan()));
   $('#p-reverse').onclick = () => { const p = curPlan(); p.wps.reverse(); planChanged(); };
   $('#p-clear').onclick = () => { if (confirm('Supprimer tous les points ?')) { curPlan().wps = []; planChanged(); } };
   $('#p-search').oninput = e => {
@@ -985,7 +1015,7 @@
     $('#s-alert').checked = S.alertOn; $('#s-alertsec').value = S.alertSec; $('#s-alertval').textContent = alertTxt(S.alertSec);
     $('#s-alertsec').disabled = !S.alertOn;
     $('#s-clock').value = S.clock; $('#s-theme').value = S.theme; $('#s-wake').checked = S.wake; $('#s-autorec').checked = S.autorec;
-    $('#s-aspon').checked = S.aspOn; $('#s-aspfloor').value = String(S.aspMaxFloor); $('#s-sivon').checked = S.sivOn; $('#s-rppon').checked = S.rppOn; $('#s-helion').checked = S.heliOn;
+    $('#s-aspon').checked = S.aspOn; $('#s-aspfloor').value = String(S.aspMaxFloor); $('#s-sivon').checked = S.sivOn; $('#s-rppon').checked = S.rppOn; $('#s-helion').checked = S.heliOn; $('#s-wxon').checked = S.wxOn; $('#s-radar').checked = S.radarOn;
     $('#s-base').value = S.base; $('#s-ignkey').value = S.ignKey; $('#s-custom').value = S.custom; $('#s-oaip').value = S.oaip; $('#s-oaipon').checked = S.oaipOn; $('#s-zmax').value = String(S.zmax);
     renderDataInfo();
     $('#s-userwps').innerHTML = userWps.length ? userWps.map(u => `<div class="row"><span class="lbl">${esc(u.name)} <small class="hint">${N.fmtCoord(u.lat, u.lon)}</small></span><button class="sm danger" data-u="${u.id}">✕</button></div>`).join('')
@@ -1006,6 +1036,8 @@
   bindS('#s-sivon', 'sivOn', t => t.checked, refreshDataLayers);
   bindS('#s-rppon', 'rppOn', t => t.checked, refreshDataLayers);
   bindS('#s-helion', 'heliOn', t => t.checked, refreshDataLayers);
+  bindS('#s-wxon', 'wxOn', t => t.checked, refreshWxLayer);
+  bindS('#s-radar', 'radarOn', t => t.checked, setRadar);
   bindS('#s-custom', 'custom', t => t.value.trim(), setBase);
   bindS('#s-ignkey', 'ignKey', t => t.value.trim(), setBase);
   bindS('#s-oaip', 'oaip', t => t.value.trim(), setBase);
@@ -1086,6 +1118,110 @@
     e.target.value = '';
   };
 
+  /* ---------- Météo & briefing ---------- */
+  let meteo = { updated: null, metars: {}, tafs: {} };
+  const CAT_COLOR = { VFR: '#1fa34a', MVFR: '#1f6fd6', IFR: '#d61f2c', LIFR: '#b01fd6' };
+  const CAT_TXT = { VFR: 'VFR', MVFR: 'VFR marginal', IFR: 'IFR', LIFR: 'IFR bas' };
+  function ageTxt(iso) {
+    if (!iso) return '';
+    const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (!isFinite(m)) return '';
+    return m < 60 ? `il y a ${m} min` : m < 1440 ? `il y a ${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}` : `il y a ${Math.floor(m / 1440)} j`;
+  }
+  async function loadMeteo(fromNetwork) {
+    if (!fromNetwork) {
+      try { const d = await IDB.get('meteo'); if (d) meteo = d; } catch (e) { /* rien */ }
+    } else {
+      try {
+        const r = await fetch('./meteo.json?t=' + Date.now(), { cache: 'no-store' });
+        if (!r.ok) throw new Error(r.status);
+        meteo = await r.json(); IDB.set('meteo', meteo);
+      } catch (e) { if (fromNetwork === 'manual') toast('Météo indisponible : réseau, ou tâche « Météo » pas encore lancée sur GitHub.', 5000); }
+    }
+    refreshWxLayer();
+    if ($('#view-prep').classList.contains('active')) renderWx();
+  }
+  function wxBlock(icao) {
+    const m = meteo.metars[icao], t = meteo.tafs[icao];
+    if (!m && !t) return '';
+    let h = '<div class="wx">';
+    if (m) h += `<div class="wxhead"><span class="cat" style="background:${CAT_COLOR[m.cat] || '#888'}">${esc(m.cat || '?')}</span> <b>${esc(icao)}</b> <small>METAR ${ageTxt(m.time)}${m.qnh ? ' · QNH ' + m.qnh : ''}</small></div><code>${esc(m.raw)}</code>`;
+    if (t) h += `<div class="wxhead"><small>TAF émis ${ageTxt(t.time)}</small></div><code>${esc(t.raw).replace(/ (BECMG|TEMPO|FM\d{6}|PROB\d\d)/g, '<br>$1')}</code>`;
+    return h + '</div>';
+  }
+  function routeStations(wps) {
+    const own = [], near = [];
+    const seen = new Set();
+    wps.forEach(w => { const c = (w.name || '').toUpperCase(); if ((meteo.metars[c] || meteo.tafs[c]) && !seen.has(c)) { seen.add(c); own.push(c); } });
+    if (wps.length >= 1) {
+      const pts = corridorPoints(wps);
+      for (const [id, m] of Object.entries(meteo.metars)) {
+        if (seen.has(id)) continue;
+        let d = Infinity; for (const p of pts) d = Math.min(d, N.distNM(p.lat, p.lon, m.lat, m.lon));
+        if (d <= 20) near.push({ id, d });
+      }
+    }
+    near.sort((a, b) => a.d - b.d);
+    return { own, near: near.slice(0, 6).map(n => n.id) };
+  }
+  function renderWx() {
+    const el = $('#p-wx'); if (!el) return;
+    const p = curPlan();
+    if (!meteo.updated) { el.innerHTML = '<p class="hint">Pas encore de météo. Touche « Actualiser la météo » (réseau requis).</p>'; return; }
+    const { own, near } = routeStations(p.wps);
+    let h = `<p class="hint">METAR/TAF NOAA — mis à jour ${ageTxt(meteo.updated)}</p>`;
+    if (!own.length && !near.length) h += '<p class="hint">Aucune station météo sur ou près de la route (20 NM).</p>';
+    own.forEach(id => h += wxBlock(id));
+    if (near.length) { h += '<p class="hint"><b>Stations proches de la route</b></p>'; near.forEach(id => h += wxBlock(id)); }
+    el.innerHTML = h;
+  }
+  function refreshWxLayer() {
+    if (!map || !map.getSource('wx')) return;
+    const list = S.wxOn ? Object.entries(meteo.metars).map(([id, m]) => ({ id, ...m })) : [];
+    map.getSource('wx').setData(fc(list, ptGeom, m => ({ id: m.id, color: CAT_COLOR[m.cat] || '#888' })));
+  }
+
+  /* Vent prévu sur la route (Open-Meteo, niveaux pression) */
+  const PLEVELS = [[1000, 360], [975, 1050], [950, 1800], [925, 2500], [900, 3250], [850, 4800], [800, 6450], [700, 9900], [600, 13800]];
+  const levelFor = ft => PLEVELS.reduce((b, l) => Math.abs(l[1] - ft) < Math.abs(b[1] - ft) ? l : b)[0];
+  async function forecastWinds() {
+    const p = curPlan(); if (p.wps.length < 2) return toast('Il faut au moins 2 points');
+    const ac = getAc(p.acId), cruise = +p.cruiseAlt || 3000;
+    const dep = p.depTime ? new Date(p.depTime) : new Date(Date.now() + 3600000);
+    const btn = $('#p-wind'); btn.disabled = true; btn.textContent = 'Calcul du vent…';
+    try {
+      const legs = [];
+      for (let i = 1; i < p.wps.length; i++) {
+        const a = p.wps[i - 1], b = p.wps[i];
+        const alt = +b.alt || cruise;
+        legs.push({ i, lat: (a.lat + b.lat) / 2, lon: (a.lon + b.lon) / 2, lvl: levelFor(alt) });
+      }
+      const levels = [...new Set(legs.map(l => l.lvl))];
+      const hourly = levels.flatMap(l => [`wind_speed_${l}hPa`, `wind_direction_${l}hPa`]).join(',');
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${legs.map(l => l.lat.toFixed(3)).join(',')}&longitude=${legs.map(l => l.lon.toFixed(3)).join(',')}&hourly=${hourly}&wind_speed_unit=kn&timezone=GMT&forecast_days=4`;
+      const r = await fetch(url); if (!r.ok) throw new Error(r.status);
+      let data = await r.json(); if (!Array.isArray(data)) data = [data];
+      // temps estimé au milieu de chaque branche
+      const log = N.computeLog(p.wps, ac, { dir: +p.wind.dir || 0, spd: +p.wind.spd || 0 });
+      legs.forEach((l, k) => {
+        const d = data[k], lg = log.legs[k];
+        const t = new Date(dep.getTime() + ((lg.cumMin || 0) - (lg.min || 0) / 2) * 60000);
+        const times = d.hourly.time.map(s => new Date(s + 'Z').getTime());
+        let idx = 0; times.forEach((tt, j) => { if (Math.abs(tt - t) < Math.abs(times[idx] - t)) idx = j; });
+        const spd = d.hourly[`wind_speed_${l.lvl}hPa`][idx], dir = d.hourly[`wind_direction_${l.lvl}hPa`][idx];
+        if (spd !== null && dir !== null) { p.wps[l.i].wdir = Math.round(dir / 5) * 5 % 360; p.wps[l.i].wspd = Math.round(spd); }
+      });
+      savePlans(); renderWps(); renderLog();
+      toast(`Vent prévu appliqué (${dep.toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}, niveau ${levels.map(l => l + ' hPa').join(', ')})`, 5000);
+    } catch (e) { console.warn(e); toast('Vent prévu indisponible (réseau ?)'); }
+    btn.disabled = false; btn.textContent = '🌬 Vent prévu sur chaque branche';
+  }
+
+  function routeString(p) { return p.wps.map(w => w.name).join(' '); }
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); toast('Copié : ' + t); } catch (e) { prompt('Copie ce texte :', t); }
+  }
+
   /* ---------- Écran allumé ---------- */
   let wakeLock = null;
   async function wake() {
@@ -1103,6 +1239,8 @@
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   initMap(); updateOrientBtn(); updateNavButtons(); onFixUpdate();
   loadData();
+  loadMeteo(false).then(() => { if (!meteo.updated || Date.now() - new Date(meteo.updated) > 20 * 60000) loadMeteo(true); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && (!meteo.updated || Date.now() - new Date(meteo.updated) > 20 * 60000)) loadMeteo(true); });
   startGps(); wake();
   // traces interrompues (app fermée en vol) : marquées terminées
   IDB.allTracks().then(ts => ts.filter(t => !t.done).forEach(t => { t.done = true; IDB.putTrack(t); })).catch(() => {});

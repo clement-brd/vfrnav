@@ -1,5 +1,5 @@
 /* VFR Nav — service worker : fonctionnement hors ligne */
-const APP_CACHE = 'vfrnav-app-v7';
+const APP_CACHE = 'vfrnav-app-v8';
 const TILE_CACHE = 'vfrnav-tiles';
 const LIB = [
   'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js',
@@ -23,7 +23,7 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = req.url;
-  if (/\.geojson(\?|$)/.test(url)) return; // données aéro : toujours depuis le réseau
+  if (/\.geojson(\?|$)|meteo\.json/.test(url)) return; // données aéro : toujours depuis le réseau
 
   // Tuiles de carte : cache d'abord, puis réseau (et mise en cache)
   if (isTile(url)) {

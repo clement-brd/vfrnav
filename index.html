@@ -90,6 +90,24 @@
       </div>
     </div>
 
+    <h2>Météo &amp; briefing</h2>
+    <div class="card">
+      <div class="row"><label class="lbl">Départ prévu</label><input id="p-dep" type="datetime-local"></div>
+      <div class="row"><label class="lbl">Altitude de croisière (ft)</label><input id="p-cruise" type="number" inputmode="numeric" class="num" placeholder="3000"></div>
+      <button id="p-wind" class="sm">🌬 Vent prévu sur chaque branche</button>
+      <p class="hint">Vent Open-Meteo à l'altitude de chaque branche (ou de croisière), à l'heure estimée de passage. Remplit le vent par branche du log.</p>
+      <div class="row">
+        <button id="p-wxrefresh" class="sm ghost">⟳ Actualiser la météo</button>
+        <button id="p-copyroute" class="sm ghost">Copier la route</button>
+      </div>
+      <div id="p-wx"></div>
+      <div class="row">
+        <button id="p-sofia" class="sm">NOTAM — SOFIA Briefing</button>
+        <button id="p-aeroweb" class="sm">TEMSI / WINTEM — Aéroweb</button>
+      </div>
+      <p class="hint">SOFIA : la route est copiée, colle-la dans « Route ». Aéroweb nécessite un compte Météo-France (gratuit pour les pilotes).</p>
+    </div>
+
     <h2>Log de nav</h2>
     <div class="card scroll-x"><table id="p-log"></table></div>
 
@@ -169,6 +187,8 @@
       <div class="row"><label class="lbl">Secteurs SIV</label><input id="s-sivon" type="checkbox" class="switch"></div>
       <div class="row"><label class="lbl">Points de report VFR</label><input id="s-rppon" type="checkbox" class="switch"></div>
       <div class="row"><label class="lbl">Hélistations</label><input id="s-helion" type="checkbox" class="switch"></div>
+      <div class="row"><label class="lbl">Pastilles météo METAR (vert VFR, bleu marginal, rouge IFR)</label><input id="s-wxon" type="checkbox" class="switch"></div>
+      <div class="row"><label class="lbl">Radar pluie (RainViewer, réseau requis)</label><input id="s-radar" type="checkbox" class="switch"></div>
       <p class="hint">Touche une zone sur la carte pour voir son nom, son plafond, son plancher et sa fréquence.</p>
     </div>
 

@@ -1,0 +1,59 @@
+name: Météo
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  meteo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: METAR et TAF (France et frontières)
+        run: |
+          python3 - <<'PY'
+          import gzip, json, urllib.request, datetime
+          import xml.etree.ElementTree as ET
+          UA = {'User-Agent': 'vfrnav-github-action (app VFR personnelle)'}
+          def get(u):
+              r = urllib.request.urlopen(urllib.request.Request(u, headers=UA), timeout=90)
+              return ET.fromstring(gzip.decompress(r.read()))
+          def box(lat, lon):
+              return 41 <= lat <= 52.5 and -6 <= lon <= 10.5
+          out = {'updated': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'metars': {}, 'tafs': {}}
+          for m in get('https://aviationweather.gov/data/cache/metars.cache.xml.gz').iter('METAR'):
+              g = lambda k: (m.findtext(k) or '').strip()
+              try:
+                  lat, lon = float(g('latitude')), float(g('longitude'))
+              except ValueError:
+                  continue
+              if not box(lat, lon):
+                  continue
+              qnh = ''
+              try:
+                  qnh = str(round(float(g('altim_in_hg')) * 33.8639))
+              except ValueError:
+                  pass
+              out['metars'][g('station_id')] = {'raw': g('raw_text'), 'time': g('observation_time'), 'cat': g('flight_category'),
+                  'lat': lat, 'lon': lon, 'wdir': g('wind_dir_degrees'), 'wspd': g('wind_speed_kt'), 'gust': g('wind_gust_kt'),
+                  'temp': g('temp_c'), 'dew': g('dewpoint_c'), 'qnh': qnh}
+          for t in get('https://aviationweather.gov/data/cache/tafs.cache.xml.gz').iter('TAF'):
+              g = lambda k: (t.findtext(k) or '').strip()
+              try:
+                  lat, lon = float(g('latitude')), float(g('longitude'))
+              except ValueError:
+                  continue
+              if box(lat, lon):
+                  out['tafs'][g('station_id')] = {'raw': g('raw_text'), 'time': g('issue_time')}
+          json.dump(out, open('meteo.json', 'w'), separators=(',', ':'), ensure_ascii=False)
+          print(len(out['metars']), 'METAR,', len(out['tafs']), 'TAF')
+          PY
+      - name: Enregistrer
+        run: |
+          git config user.name "maj-meteo"
+          git config user.email "actions@users.noreply.github.com"
+          git add meteo.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Météo $(date -u +%H:%MZ)"
+          for i in 1 2 3; do git pull --rebase && git push && break; sleep 5; done
