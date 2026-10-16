@@ -37,9 +37,29 @@
       </div>
     </div>
 
+    <div id="editbar">
+      <div class="row"><b id="e-title" class="lbl"></b><button id="e-name" class="sm ghost">Renommer le vol</button></div>
+      <div id="e-stats" class="hint"></div>
+      <div class="row">
+        <button id="e-undo" class="sm ghost">↶ Annuler</button>
+        <button id="e-reverse" class="sm ghost">⇅ Inverser</button>
+        <button id="e-clear" class="sm danger">Effacer</button>
+        <button id="e-done" class="sm">✓ Terminé</button>
+      </div>
+      <p class="hint">Touche un terrain, une balise ou un point de report pour l'ajouter, ou n'importe où pour un point libre. Touche un segment pour insérer un point. Fais glisser un point pour le déplacer, touche-le pour le renommer.</p>
+    </div>
+
+    <aside id="sidelog">
+      <h3 id="sidelog-title"></h3>
+      <table id="sidelog-table" class="logt compact"></table>
+      <p id="sidelog-foot" class="hint"></p>
+    </aside>
+
     <div id="alert" class="hidden"></div>
 
     <div id="mapbtns">
+      <button id="b-edit" title="Créer / modifier la route">✎</button>
+      <button id="b-split" class="hidden" title="Log à côté de la carte">▤</button>
       <button id="b-orient" title="Orientation">N↑</button>
       <button id="b-follow" class="on" title="Centrer">◎</button>
       <button id="b-direct" title="Direct To">D→</button>
@@ -82,7 +102,8 @@
         <input id="p-search" placeholder="Ajouter : code OACI, nom de terrain, point perso…" autocomplete="off">
         <div id="p-results" class="results"></div>
       </div>
-      <p class="hint">Astuce : appui long sur la carte pour ajouter n'importe quel point.</p>
+      <button id="p-editmap" class="sm">✎ Tracer / modifier la route sur la carte</button>
+      <p class="hint">Touche le nom d'un point pour le renommer.</p>
       <div id="p-wps"></div>
       <div class="row">
         <button id="p-reverse" class="sm ghost">⇅ Inverser la route</button>
@@ -126,6 +147,25 @@
 
     <button id="p-activate" class="big">✈ Activer ce vol en navigation</button>
     <p class="hint center">Aide à la navigation non certifiée — à utiliser avec une carte OACI à jour.</p>
+  </section>
+
+  <!-- ================= LOG DE NAV ================= -->
+  <section id="view-log" class="view page">
+    <h1>Log de navigation</h1>
+    <div class="card">
+      <b id="l-title"></b>
+      <p id="l-sub" class="hint"></p>
+      <div class="row">
+        <button id="l-atd" class="sm"></button>
+        <button id="l-reset" class="sm ghost">Effacer les heures</button>
+      </div>
+    </div>
+    <div class="card scroll-x" style="margin-top:12px"><table id="l-table" class="logt"></table></div>
+    <p class="hint">HE : heure estimée (en italique : recalculée d'après le dernier point passé) · HR : heure réelle, notée automatiquement au passage de chaque point · Écart en minutes. Touche un point pour le renommer.</p>
+    <div class="row">
+      <button id="l-print" class="sm ghost">🖨 Imprimer / PDF</button>
+      <button id="l-csv" class="sm ghost">Exporter CSV</button>
+    </div>
   </section>
 
   <!-- ================= FLOTTE ================= -->
@@ -256,6 +296,7 @@
   <nav id="tabs">
     <button data-view="map" class="active"><span>🗺</span>Carte</button>
     <button data-view="prep"><span>📋</span>Prépa</button>
+    <button data-view="log"><span>🧾</span>Log</button>
     <button data-view="fleet"><span>✈</span>Flotte</button>
     <button data-view="settings"><span>⚙</span>Réglages</button>
   </nav>

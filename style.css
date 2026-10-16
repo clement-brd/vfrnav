@@ -112,11 +112,11 @@ button:active { opacity: .7; }
 .wp .legopts input { flex: 0 0 72px; min-height: 34px; padding: 6px 8px; font-size: 15px; text-align: right; }
 .scroll-x { overflow-x: auto; padding: 4px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-#p-log th, #p-log td { padding: 7px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-size: 14px; }
-#p-log th { color: var(--mute); font-size: 11px; font-weight: 600; text-transform: uppercase; }
-#p-log td:first-child, #p-log th:first-child { text-align: left; }
-#p-log td.hdg { color: var(--accent); font-weight: 700; }
-#p-log tr.tot td { font-weight: 700; border-top: 2px solid var(--line); }
+#p-log th, #p-log td, .logt th, .logt td { padding: 7px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-size: 14px; }
+#p-log th, .logt th { color: var(--mute); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+#p-log td:first-child, #p-log th:first-child, .logt td:first-child, .logt th:first-child { text-align: left; }
+#p-log td.hdg, .logt td.hdg { color: var(--accent); font-weight: 700; }
+#p-log tr.tot td, .logt tr.tot td { font-weight: 700; border-top: 2px solid var(--line); }
 table.kv td { padding: 6px 4px; border-bottom: 1px solid var(--line); }
 table.kv td:last-child { text-align: right; font-weight: 600; }
 table.kv tr.tot td { font-weight: 800; }
@@ -149,3 +149,43 @@ table.kv tr.tot td { font-weight: 800; }
 .wxhead small { color: var(--mute); }
 .cat { color: #fff; font-size: 11px; font-weight: 800; padding: 1px 6px; border-radius: 5px; }
 input[type=datetime-local] { min-height: 42px; }
+
+/* Log de navigation */
+.logt { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.logt tr.cur td { background: rgba(255, 0, 204, .14); }
+.logt tr.cur td:first-child b { color: var(--accent); }
+.logt tr.done td { opacity: .55; }
+.logt b[data-wp] { cursor: pointer; text-decoration: underline dotted; }
+.logt .rev { font-style: italic; color: var(--warn); }
+.logt.compact th, .logt.compact td { font-size: 13px; padding: 6px 4px; }
+.wp .head b.ren { cursor: pointer; }
+
+/* Mode édition de route */
+#editbar { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 7; padding: calc(var(--safe-t) + 8px) 12px 8px;
+  background: var(--panel); border-bottom: 2px solid var(--accent); }
+#editbar .hint { margin: 2px 0; }
+#view-map.editing #editbar { display: block; }
+#view-map.editing #instruments { display: none; }
+.wpedit { width: 26px; height: 26px; border-radius: 50%; background: #ff00cc; border: 3px solid #fff; box-shadow: 0 0 0 2px #ff00cc, 0 2px 6px rgba(0,0,0,.4); cursor: grab; position: relative; }
+.wpedit span { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); white-space: nowrap; background: #ff00cc; color: #fff;
+  font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 5px; }
+#mapbtns button#b-edit.on { background: #ff00cc; }
+
+/* Panneau latéral iPad */
+#sidelog { display: none; position: absolute; top: 0; right: 0; bottom: 0; width: 380px; z-index: 6; overflow-y: auto;
+  background: var(--panel); border-left: 1px solid var(--line); padding: calc(var(--safe-t) + 10px) 10px 20px; }
+#sidelog h3 { margin: 0 0 8px; font-size: 16px; }
+#view-map.split #sidelog { display: block; }
+#view-map.split #map, #view-map.split #instruments, #view-map.split #editbar { right: 380px; }
+#view-map.split #mapbtns { right: 390px; }
+#view-map.split #alert { left: 10px; right: 390px; }
+#view-map.split .maplibregl-ctrl-bottom-right { right: 456px; }
+
+/* Impression du log */
+@media print {
+  body.printing-log #tabs, body.printing-log .view:not(#view-log), body.printing-log #view-log button, body.printing-log #toast { display: none !important; }
+  body.printing-log, body.printing-log #app, body.printing-log .view { position: static !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
+  body.printing-log #view-log { display: block !important; }
+  body.printing-log .card { border: 0; background: #fff; }
+  body.printing-log .logt th, body.printing-log .logt td { color: #000; border-bottom: 1px solid #999; font-size: 11px; }
+}

@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.7.1';
+  const VERSION = '1.8.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -36,7 +36,7 @@
   /* ---------- État ---------- */
   const DEF_SETTINGS = { alertOn: true, alertSec: 60, clock: 'local', theme: 'dark', wake: true, autorec: true,
     base: 'oaci', ignKey: 'ign_scan_ws', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
-    aspOn: true, aspMaxFloor: 11500, sivOn: false, rppOn: true, heliOn: false, wxOn: true, radarOn: false };
+    splitLog: false, aspOn: true, aspMaxFloor: 11500, sivOn: false, rppOn: true, heliOn: false, wxOn: true, radarOn: false };
   const S = Object.assign({}, DEF_SETTINGS, LS.get('settings', {}));
   if (S.base === 'light' || S.base === 'voyager') S.base = 'ign'; // anciens fonds Carto (clé désormais requise)
   if (!S.oaciV15) { S.base = 'oaci'; if (!S.ignKey) S.ignKey = 'ign_scan_ws'; S.oaciV15 = true; LS.set('settings', S); } // passage à la carte OACI par défaut
@@ -80,6 +80,8 @@
     document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
     if (v === 'map' && map) setTimeout(() => map.resize(), 50);
     if (v === 'prep') renderPrep();
+    if (v === 'log') renderNavLog();
+    if (v !== 'map' && editMode) setEditMode(false);
     if (v === 'fleet') { renderFleet(); renderTracks(); }
     if (v === 'settings') renderSettings();
   }
@@ -393,10 +395,11 @@
     map.on('dragstart', e => { if (e.originalEvent) setFollow(false); });
     map.on('click', e => {
       if (longPressFired) { longPressFired = false; return; }
+      if (editMode) return editClick(e);
       const bb = [[e.point.x - 14, e.point.y - 14], [e.point.x + 14, e.point.y + 14]];
       const layers = ['wps', 'userwps', 'wx', 'rpp', 'navaids', 'ads'].filter(l => map.getLayer(l));
       const f = map.queryRenderedFeatures(bb, { layers })[0];
-      if (f) return pointSheet(featureToPoint(f));
+      if (f) { if (f.layer.id === 'wps') { const pl = nav.mode === 'plan' && getPlan(nav.planId) ? getPlan(nav.planId) : curPlan(); return wpSheet(pl, +f.properties.idx); } return pointSheet(featureToPoint(f)); }
       if (airspacesAt(e.point).length) freePointSheet(e.lngLat, e.point);
     });
     // Appui long → point libre
@@ -405,11 +408,11 @@
     map.on('touchstart', e => {
       if (e.originalEvent.touches.length !== 1) return cancelLp();
       lpStart = e.point; const ll = e.lngLat, pt = e.point;
-      lpT = setTimeout(() => { longPressFired = true; freePointSheet(ll, pt); setTimeout(() => longPressFired = false, 800); }, 600);
+      lpT = setTimeout(() => { if (editMode) return; longPressFired = true; freePointSheet(ll, pt); setTimeout(() => longPressFired = false, 800); }, 600);
     });
     map.on('touchmove', e => { if (lpStart && (Math.abs(e.point.x - lpStart.x) > 10 || Math.abs(e.point.y - lpStart.y) > 10)) cancelLp(); });
     map.on('touchend', cancelLp); map.on('touchcancel', cancelLp);
-    map.on('contextmenu', e => freePointSheet(e.lngLat, e.point));
+    map.on('contextmenu', e => { if (!editMode) freePointSheet(e.lngLat, e.point); });
   }
 
   function airspacesAt(point) {
@@ -501,6 +504,7 @@
   const refreshAdLabels = () => {};
 
   function activeWps() {
+    if (editMode) return curPlan().wps;
     if (nav.mode === 'plan') { const p = getPlan(nav.planId); return p ? p.wps : []; }
     return curPlan() ? curPlan().wps : [];
   }
@@ -511,8 +515,18 @@
     map.getSource('wps').setData({ type: 'FeatureCollection', features: wps.map((w, i) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [w.lon, w.lat] }, properties: { name: w.name, idx: i } })) });
     wpMarkers.forEach(m => m.remove()); wpMarkers = [];
     wps.forEach((w, i) => {
+      if (editMode) {
+        const el = document.createElement('div'); el.className = 'wpedit';
+        el.innerHTML = `<span>${i + 1}. ${esc(w.name)}</span>`;
+        const mk = new maplibregl.Marker({ element: el, anchor: 'center', draggable: true }).setLngLat([w.lon, w.lat]).addTo(map);
+        let dragged = false;
+        mk.on('dragstart', () => { dragged = true; snap(); });
+        mk.on('dragend', () => { const ll = mk.getLngLat(); w.lat = ll.lat; w.lon = ll.lng; w.full = 'Point déplacé ' + N.fmtCoord(w.lat, w.lon); editChanged(); setTimeout(() => dragged = false, 300); });
+        el.addEventListener('click', ev => { ev.stopPropagation(); if (dragged) return; wpSheet(curPlan(), i); });
+        wpMarkers.push(mk); return;
+      }
       const el = document.createElement('div'); el.className = 'wplabel' + (nav.mode === 'plan' && nav.legIdx === i ? ' active' : ''); el.textContent = w.name;
-      wpMarkers.push(new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([w.lon, w.lat]).addTo(map));
+      wpMarkers.push(new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -8] }).setLngLat([w.lon, w.lat]).addTo(map));
     });
     if (nav.mode === 'direct' && nav.target) {
       const el = document.createElement('div'); el.className = 'wplabel active'; el.textContent = nav.target.name;
@@ -657,6 +671,7 @@
     const t = navTarget();
     if (nav.mode === 'plan') {
       const p = getPlan(nav.planId);
+      markPassed(p, nav.legIdx);
       if (nav.legIdx < p.wps.length - 1) {
         nav.legIdx++; resetLeg(); saveNav(); refreshRoute();
         const nt = navTarget();
@@ -673,7 +688,8 @@
       if (auto && t) showAlert(`${esc(t.name)} atteint`, 'passed');
       stopNav(); return;
     }
-    updateNavButtons(); onFixUpdate();
+    updateNavButtons(); onFixUpdate(); renderSide(true);
+    if ($('#view-log').classList.contains('active')) renderNavLog();
   }
 
   let alertT;
@@ -770,6 +786,7 @@
       showAlert(`Approche ${esc(t.name)}<small>${sub}</small>`);
     }
     // Séquencement automatique
+    renderSide();
     if (dist < minDist) minDist = dist;
     if (dist < 0.5 || (minDist < 2 && dist > minDist + 0.25)) nextLeg(true);
   }
@@ -834,7 +851,8 @@
   function startRec(auto) {
     rec = { id: uid(), start: Date.now(), auto: !!auto, pts: [], done: false, name: '' };
     const p = nav.mode === 'plan' ? getPlan(nav.planId) : null;
-    rec.acId = (p || curPlan() || {}).acId || null; rec.name = p ? p.name : 'Vol du ' + new Date().toLocaleDateString('fr-FR');
+    rec.acId = (p || curPlan() || {}).acId || null;
+    if (p && auto && !flightOf(p).atd) { setAtd(p, Date.now()); renderSide(true); } rec.name = p ? p.name : 'Vol du ' + new Date().toLocaleDateString('fr-FR');
     $('#b-rec').classList.add('rec'); $('#b-rec').textContent = '■ STOP';
     toast(auto ? 'Décollage détecté — trace en cours' : 'Enregistrement de la trace');
     IDB.putTrack(rec);
@@ -915,10 +933,11 @@
     const p = curPlan(), el = $('#p-wps');
     if (!p.wps.length) { el.innerHTML = '<p class="hint">Aucun point. Commence par le terrain de départ.</p>'; return; }
     el.innerHTML = p.wps.map((w, i) => `<div class="wp" data-i="${i}">
-      <div class="head"><b>${i === 0 ? '🛫 ' : i === p.wps.length - 1 ? '🛬 ' : ''}${esc(w.name)}<small>${esc(w.full && w.full !== w.name ? w.full : N.fmtCoord(w.lat, w.lon))}</small></b>
+      <div class="head"><b data-ren="${i}" class="ren">${i === 0 ? '🛫 ' : i === p.wps.length - 1 ? '🛬 ' : ''}${esc(w.name)} ✎<small>${esc(w.full && w.full !== w.name ? w.full : N.fmtCoord(w.lat, w.lon))}</small></b>
         <button class="ghost" data-up="${i}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="ghost" data-down="${i}" ${i === p.wps.length - 1 ? 'disabled' : ''}>↓</button><button class="danger" data-rm="${i}">✕</button></div>
       ${i > 0 ? `<div class="legopts">Branche : alt <input type="number" inputmode="numeric" data-f="alt" value="${w.alt ?? ''}" placeholder="ft"> vent <input type="number" inputmode="numeric" data-f="wdir" value="${w.wdir ?? ''}" placeholder="dir"> / <input type="number" inputmode="numeric" data-f="wspd" value="${w.wspd ?? ''}" placeholder="kt"></div>` : ''}
     </div>`).join('');
+    el.querySelectorAll('[data-ren]').forEach(b => b.onclick = () => renameWp(p, +b.dataset.ren));
     el.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; [p.wps[i - 1], p.wps[i]] = [p.wps[i], p.wps[i - 1]]; planChanged(); });
     el.querySelectorAll('[data-down]').forEach(b => b.onclick = () => { const i = +b.dataset.down; [p.wps[i + 1], p.wps[i]] = [p.wps[i], p.wps[i + 1]]; planChanged(); });
     el.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { p.wps.splice(+b.dataset.rm, 1); planChanged(); });
@@ -926,7 +945,7 @@
       const i = +inp.closest('.wp').dataset.i; p.wps[i][inp.dataset.f] = numOrEmpty(inp.value); savePlans(); renderLog();
     });
   }
-  function planChanged() { savePlans(); renderWps(); renderLog(); renderWx(); refreshRoute(); }
+  function planChanged() { resetAta(curPlan()); savePlans(); renderWps(); renderLog(); renderWx(); refreshRoute(); renderSide(true); }
   function renderLog() {
     const p = curPlan(), ac = getAc(p.acId);
     const log = N.computeLog(p.wps, ac, { dir: +p.wind.dir || 0, spd: +p.wind.spd || 0 });
@@ -989,6 +1008,7 @@
       curPlan().wps.push(toWp(r[+d.dataset.i])); e.target.value = ''; $('#p-results').innerHTML = ''; planChanged();
     });
   };
+  $('#p-editmap').onclick = () => { showView('map'); setEditMode(true); };
   $('#p-activate').onclick = () => {
     const p = curPlan(); if (p.wps.length < 2) return toast('Il faut au moins 2 points');
     startPlanAt(1, p.id); showView('map'); setFollow(true);
@@ -1150,6 +1170,201 @@
     e.target.value = '';
   };
 
+  /* ---------- Édition de route sur la carte ---------- */
+  let editMode = false, undoStack = [];
+  const snap = () => { undoStack.push(JSON.stringify(curPlan().wps)); if (undoStack.length > 50) undoStack.shift(); };
+  function nextWpName(p) {
+    let n = 1; const names = new Set(p.wps.map(w => w.name));
+    while (names.has('WP' + n)) n++;
+    return 'WP' + n;
+  }
+  function setEditMode(on) {
+    editMode = on; undoStack = [];
+    $('#view-map').classList.toggle('editing', on);
+    $('#b-edit').classList.toggle('on', on);
+    if (on) { setFollow(false); renderEditBar(); toast('Touche la carte pour ajouter des points', 2500); }
+    refreshRoute();
+    if (!on && $('#view-prep').classList.contains('active')) renderPrep();
+  }
+  function renderEditBar() {
+    const p = curPlan(), ac = getAc(p.acId);
+    const log = N.computeLog(p.wps, ac, { dir: +p.wind.dir || 0, spd: +p.wind.spd || 0 });
+    $('#e-title').textContent = p.name;
+    $('#e-stats').textContent = p.wps.length < 2 ? `${p.wps.length} point — touche la carte pour ajouter`
+      : `${p.wps.length} points · ${log.totDist.toFixed(0)} NM · ${N.fmtDur(log.totMin)} · ${isFinite(log.totFuel) ? log.totFuel.toFixed(0) + ' L' : ''}`;
+    $('#e-undo').disabled = !undoStack.length;
+  }
+  function resetAta(p) { if (p.flight) p.flight.ata = p.flight.atd ? { 0: p.flight.atd } : {}; }
+  function editChanged() { resetAta(curPlan()); savePlans(); refreshRoute(); renderEditBar(); renderSide(); }
+  // distance d'un point écran à un segment écran
+  function segDist(pt, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    let t = l2 ? ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+    return Math.hypot(pt.x - (a.x + t * dx), pt.y - (a.y + t * dy));
+  }
+  function editClick(e) {
+    const p = curPlan();
+    const bb = [[e.point.x - 16, e.point.y - 16], [e.point.x + 16, e.point.y + 16]];
+    // 1. un point de la route → fiche du point
+    const wf = map.queryRenderedFeatures(bb, { layers: ['wps'] })[0];
+    if (wf) return wpSheet(p, +wf.properties.idx);
+    // 2. un terrain / balise / point de report / point perso → ajouté
+    const layers = ['userwps', 'rpp', 'navaids', 'ads'].filter(l => map.getLayer(l));
+    const f = map.queryRenderedFeatures(bb, { layers })[0];
+    let wp;
+    if (f) { const pt = featureToPoint(f); wp = toWp(pt); }
+    else wp = { name: nextWpName(p), full: '', lat: e.lngLat.lat, lon: e.lngLat.lng };
+    // 3. sur un segment → insertion ; sinon ajout à la fin
+    let ins = -1;
+    for (let i = 1; i < p.wps.length; i++) {
+      const a = map.project([p.wps[i - 1].lon, p.wps[i - 1].lat]), b = map.project([p.wps[i].lon, p.wps[i].lat]);
+      if (segDist(e.point, a, b) < 14) { ins = i; break; }
+    }
+    snap();
+    if (ins > 0) { p.wps.splice(ins, 0, wp); toast(`${wp.name} inséré`); } else p.wps.push(wp);
+    editChanged();
+  }
+  function renameWp(p, i) {
+    const w = p.wps[i]; if (!w) return;
+    const n = prompt('Nom du point de passage', w.name);
+    if (n === null) return;
+    const v = n.trim().slice(0, 24); if (!v || v === w.name) return;
+    if (editMode) snap();
+    if (!w.full) w.full = N.fmtCoord(w.lat, w.lon);
+    w.name = v; savePlans(); refreshRoute(); renderSide();
+    if (editMode) renderEditBar();
+    if ($('#view-prep').classList.contains('active')) renderPrep();
+    if ($('#view-log').classList.contains('active')) renderNavLog();
+  }
+  function wpSheet(p, i) {
+    const w = p.wps[i]; if (!w) return;
+    const code = (w.name || '').toUpperCase();
+    let h = `<h3>${esc(w.name)} <small class="hint">point ${i + 1}/${p.wps.length}</small></h3><p class="hint">${esc(w.full && w.full !== w.name ? w.full + ' · ' : '')}${N.fmtCoord(w.lat, w.lon)}</p>`;
+    h += `<button class="opt" data-a="ren">✎ Renommer</button>`;
+    if (hasVac(code)) h += `<button class="opt" data-a="vac">📄 Carte VAC ${esc(code)}</button>`;
+    if (i > 0) h += `<button class="opt" data-a="up">↑ Avancer dans la route</button>`;
+    if (i < p.wps.length - 1) h += `<button class="opt" data-a="down">↓ Reculer dans la route</button>`;
+    if (!editMode) h += `<button class="opt" data-a="direct">D→ Naviguer vers ce point</button>`;
+    h += `<button class="opt" data-a="del" style="color:var(--bad)">✕ Supprimer du vol</button>`;
+    if (editMode) h += '<p class="hint">Astuce : fais glisser le point sur la carte pour le déplacer.</p>';
+    sheet(h, root => root.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
+      const a = b.dataset.a; closeSheet();
+      if (a === 'ren') return renameWp(p, i);
+      if (a === 'vac') return openUrl(vacUrl(code));
+      if (a === 'direct') return startPlanAt(i, p.id);
+      snap();
+      if (a === 'del') p.wps.splice(i, 1);
+      if (a === 'up') [p.wps[i - 1], p.wps[i]] = [p.wps[i], p.wps[i - 1]];
+      if (a === 'down') [p.wps[i + 1], p.wps[i]] = [p.wps[i], p.wps[i + 1]];
+      if (editMode) editChanged(); else planChanged();
+    }));
+  }
+  $('#b-edit').onclick = () => setEditMode(!editMode);
+  $('#e-done').onclick = () => setEditMode(false);
+  $('#e-undo').onclick = () => { if (!undoStack.length) return; curPlan().wps = JSON.parse(undoStack.pop()); editChanged(); };
+  $('#e-clear').onclick = () => { if (!curPlan().wps.length || !confirm('Effacer tous les points du vol ?')) return; snap(); curPlan().wps = []; editChanged(); };
+  $('#e-reverse').onclick = () => { snap(); curPlan().wps.reverse(); editChanged(); };
+  $('#e-name').onclick = () => { const n = prompt('Nom du vol', curPlan().name); if (n && n.trim()) { curPlan().name = n.trim(); savePlans(); renderEditBar(); } };
+
+  /* ---------- Log de navigation ---------- */
+  function logPlan() { return nav.mode === 'plan' && getPlan(nav.planId) ? getPlan(nav.planId) : curPlan(); }
+  function flightOf(p) { if (!p.flight) p.flight = { atd: null, ata: {} }; if (!p.flight.ata) p.flight.ata = {}; return p.flight; }
+  function markPassed(p, idx) { const f = flightOf(p); if (!f.ata[idx]) { f.ata[idx] = Date.now(); savePlans(); } }
+  function setAtd(p, t) { const f = flightOf(p); f.atd = t; f.ata[0] = t; savePlans(); }
+  const freqOf = name => { const c = (name || '').toUpperCase(); const a = airports.find(x => x.icao === c); return a ? a.pfreq : ''; };
+  function navLogData(p) {
+    const ac = getAc(p.acId), log = N.computeLog(p.wps, ac, { dir: +p.wind.dir || 0, spd: +p.wind.spd || 0 });
+    const f = flightOf(p), utc = S.clock === 'utc';
+    const base = f.atd || (p.depTime ? new Date(p.depTime).getTime() : null);
+    const onboard = p.onboard === '' || p.onboard === undefined ? NaN : +p.onboard;
+    // dernier point réellement passé → révision des heures suivantes
+    let lastK = -1; p.wps.forEach((_, i) => { if (f.ata[i]) lastK = i; });
+    const cum = [0, ...log.legs.map(l => l.cumMin)];
+    const rows = p.wps.map((w, i) => {
+      const lg = i > 0 ? log.legs[i - 1] : null;
+      const plannedT = base ? base + cum[i] * 60000 : null;
+      const revT = lastK >= 0 && i > lastK ? f.ata[lastK] + (cum[i] - cum[lastK]) * 60000 : plannedT;
+      const ata = f.ata[i] || null;
+      const ecart = ata && plannedT ? Math.round((ata - plannedT) / 60000) : null;
+      const fuelLeft = isFinite(onboard) ? onboard - (+ac.taxi || 0) - (i > 0 ? log.legs.slice(0, i).reduce((s, l) => s + (l.fuel || 0), 0) : 0) : NaN;
+      return { i, w, lg, he: plannedT, her: revT, ata, ecart, fuelLeft, freq: freqOf(w.name) };
+    });
+    return { p, ac, log, rows, utc, base, active: nav.mode === 'plan' && nav.planId === p.id ? nav.legIdx : -1 };
+  }
+  const clk = (t, utc) => t ? N.fmtClock(new Date(t), utc) : '—';
+  function navLogTable(d, compact) {
+    const f1 = v => isFinite(v) ? v.toFixed(1) : '—';
+    let h = compact
+      ? '<tr><th>Point</th><th>Cv</th><th>Dist</th><th>Tps</th><th>HE</th><th>HR</th></tr>'
+      : '<tr><th>Point</th><th>Fréq.</th><th>Alt</th><th>Rv</th><th>Vent</th><th>Cv</th><th>Dist</th><th>Vs</th><th>Tps</th><th>HE</th><th>HR</th><th>Écart</th><th>Carbu L</th></tr>';
+    for (const r of d.rows) {
+      const lg = r.lg, cls = r.i === d.active ? 'cur' : r.ata ? 'done' : '';
+      const he = r.her && r.her !== r.he && !r.ata ? `<span class="rev">${clk(r.her, d.utc)}</span>` : clk(r.he, d.utc);
+      const ec = r.ecart === null ? '' : `<span class="${Math.abs(r.ecart) <= 2 ? 'okc' : 'warnc'}">${r.ecart > 0 ? '+' : ''}${r.ecart}</span>`;
+      const name = `<b data-wp="${r.i}">${esc(r.w.name)}</b>`;
+      h += compact
+        ? `<tr class="${cls}"><td>${name}</td><td class="hdg">${lg ? N.fmtHdg(lg.th) : ''}</td><td>${lg ? f1(lg.dist) : ''}</td><td>${lg ? N.fmtDur(lg.min) : ''}</td><td>${he}</td><td>${clk(r.ata, d.utc)}</td></tr>`
+        : `<tr class="${cls}"><td>${name}</td><td>${esc(r.freq || '')}</td><td>${lg && lg.alt ? lg.alt : ''}</td><td>${lg ? N.fmtHdg(lg.tc) : ''}</td>
+           <td>${lg && lg.wspd ? String(Math.round(lg.wdir)).padStart(3, '0') + '/' + lg.wspd : ''}</td><td class="hdg">${lg ? N.fmtHdg(lg.th) : ''}</td>
+           <td>${lg ? f1(lg.dist) : ''}</td><td>${lg && isFinite(lg.gs) ? Math.round(lg.gs) : ''}</td><td>${lg ? N.fmtDur(lg.min) : ''}</td>
+           <td>${he}</td><td>${clk(r.ata, d.utc)}</td><td>${ec}</td><td class="${isFinite(r.fuelLeft) && r.fuelLeft < (+d.ac.reserveMin || 0) / 60 * (+d.ac.conso || 0) ? 'badc' : ''}">${f1(r.fuelLeft)}</td></tr>`;
+    }
+    const L = d.log;
+    h += compact ? `<tr class="tot"><td>Total</td><td></td><td>${f1(L.totDist)}</td><td>${N.fmtDur(L.totMin)}</td><td></td><td></td></tr>`
+      : `<tr class="tot"><td>Total</td><td></td><td></td><td></td><td></td><td></td><td>${f1(L.totDist)}</td><td></td><td>${N.fmtDur(L.totMin)}</td><td></td><td></td><td></td><td></td></tr>`;
+    return h;
+  }
+  function bindWpNames(root, p) { root.querySelectorAll('[data-wp]').forEach(b => b.onclick = () => wpSheet(p, +b.dataset.wp)); }
+  function renderNavLog() {
+    const p = logPlan(), d = navLogData(p), f = flightOf(p);
+    $('#l-title').textContent = p.name;
+    $('#l-sub').textContent = `${d.ac.reg || ''} ${d.ac.name || ''} · ${d.log.totDist.toFixed(0)} NM · ${N.fmtDur(d.log.totMin)}`
+      + (f.atd ? ` · décollage ${clk(f.atd, d.utc)}` : p.depTime ? ` · départ prévu ${clk(new Date(p.depTime).getTime(), d.utc)}` : ' · heure de départ non définie');
+    $('#l-table').innerHTML = p.wps.length >= 2 ? navLogTable(d, false) : '<tr><td class="hint">Crée une route (Carte → ✎, ou Prépa).</td></tr>';
+    bindWpNames($('#l-table'), p);
+    $('#l-atd').textContent = f.atd ? '🛫 Décollage : ' + clk(f.atd, d.utc) + ' (modifier)' : '🛫 Décollage maintenant';
+  }
+  $('#l-atd').onclick = () => {
+    const p = logPlan(), f = flightOf(p);
+    if (f.atd) { const v = prompt('Heure de décollage (HH:MM, heure ' + (S.clock === 'utc' ? 'UTC' : 'locale') + ')', clk(f.atd, S.clock === 'utc').replace('Z', ''));
+      if (!v) return; const m = v.match(/^(\d{1,2})[:h](\d{2})$/); if (!m) return toast('Format HH:MM');
+      const t = new Date(f.atd); if (S.clock === 'utc') t.setUTCHours(+m[1], +m[2], 0, 0); else t.setHours(+m[1], +m[2], 0, 0); setAtd(p, t.getTime()); }
+    else setAtd(p, Date.now());
+    renderNavLog(); renderSide();
+  };
+  $('#l-reset').onclick = () => { const p = logPlan(); if (confirm('Effacer les heures réelles de ce vol ?')) { p.flight = { atd: null, ata: {} }; savePlans(); renderNavLog(); renderSide(); } };
+  $('#l-print').onclick = () => { document.body.classList.add('printing-log'); setTimeout(() => { window.print(); document.body.classList.remove('printing-log'); }, 50); };
+  $('#l-csv').onclick = () => {
+    const d = navLogData(logPlan()), sep = ';';
+    const lines = [['Point', 'Fréq', 'Alt', 'Rv', 'Vent', 'Cv', 'Dist NM', 'Vs kt', 'Temps min', 'HE', 'HR', 'Carbu L'].join(sep)];
+    d.rows.forEach(r => { const l = r.lg; lines.push([r.w.name, r.freq || '', l && l.alt || '', l ? Math.round(l.tc) : '', l && l.wspd ? l.wdir + '/' + l.wspd : '', l ? Math.round(l.th) : '', l ? l.dist.toFixed(1) : '', l ? Math.round(l.gs) : '', l ? Math.round(l.min) : '', clk(r.he, d.utc), clk(r.ata, d.utc), isFinite(r.fuelLeft) ? r.fuelLeft.toFixed(1) : ''].join(sep)); });
+    shareFile(`log-${(d.p.name || 'vol').replace(/[^\w-]+/g, '_')}.csv`, '﻿' + lines.join('\n'), 'text/csv');
+  };
+
+  /* Panneau latéral (iPad) */
+  const wideScreen = () => window.innerWidth >= 900;
+  let sideT = 0;
+  function applySplit() {
+    const on = !!S.splitLog && wideScreen();
+    $('#view-map').classList.toggle('split', on);
+    $('#b-split').classList.toggle('hidden', !wideScreen());
+    $('#b-split').classList.toggle('on', on);
+    if (map) setTimeout(() => map.resize(), 60);
+    if (on) renderSide(true);
+  }
+  function renderSide(force) {
+    if (!$('#view-map').classList.contains('split')) return;
+    const now = Date.now(); if (!force && now - sideT < 4000) return; sideT = now;
+    const p = logPlan(), d = navLogData(p);
+    $('#sidelog-title').textContent = p.name;
+    $('#sidelog-table').innerHTML = p.wps.length >= 2 ? navLogTable(d, true) : '<tr><td class="hint">Pas de route. Touche ✎ pour en créer une.</td></tr>';
+    bindWpNames($('#sidelog-table'), p);
+    const fb = N.fuelBalance(d.log, d.ac, { extraMin: p.extraMin, onboard: p.onboard });
+    $('#sidelog-foot').innerHTML = isFinite(fb.onboard) ? `Carburant requis ${fb.required.toFixed(0)} L · à bord ${fb.onboard.toFixed(0)} L · <span class="${fb.margin >= 0 ? 'okc' : 'badc'}">marge ${fb.margin >= 0 ? '+' : ''}${fb.margin.toFixed(0)} L</span>` : '';
+  }
+  $('#b-split').onclick = () => { S.splitLog = !S.splitLog; saveSettings(); applySplit(); };
+  window.addEventListener('resize', () => applySplit());
+
   /* ---------- Météo & briefing ---------- */
   let meteo = { updated: null, metars: {}, tafs: {} };
   const CAT_COLOR = { VFR: '#1fa34a', MVFR: '#1f6fd6', IFR: '#d61f2c', LIFR: '#b01fd6' };
@@ -1272,7 +1487,7 @@
   /* ---------- Démarrage ---------- */
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e));
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-  initMap(); updateOrientBtn(); updateNavButtons(); onFixUpdate();
+  initMap(); applySplit(); updateOrientBtn(); updateNavButtons(); onFixUpdate();
   loadData();
   loadMeteo(false).then(() => { if (!meteo.updated || Date.now() - new Date(meteo.updated) > 20 * 60000) loadMeteo(true); });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && (!meteo.updated || Date.now() - new Date(meteo.updated) > 20 * 60000)) loadMeteo(true); });
