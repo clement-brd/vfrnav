@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -35,7 +35,7 @@
 
   /* ---------- État ---------- */
   const DEF_SETTINGS = { alertOn: true, alertSec: 60, clock: 'local', theme: 'dark', wake: true, autorec: true,
-    base: 'ign', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
+    base: 'ign', ignKey: '', custom: '', oaip: '', oaipOn: false, zmax: 11, orient: 'north',
     aspOn: true, aspMaxFloor: 11500, sivOn: false, rppOn: true, heliOn: false };
   const S = Object.assign({}, DEF_SETTINGS, LS.get('settings', {}));
   if (S.base === 'light' || S.base === 'voyager') S.base = 'ign'; // anciens fonds Carto (clé désormais requise)
@@ -270,7 +270,9 @@
     ortho: { tiles: ['https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}'], maxzoom: 19, attribution: '© IGN Photographies aériennes' },
     osm: { tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], maxzoom: 19, attribution: '© OpenStreetMap' }
   };
-  const baseDef = () => S.base === 'custom' && S.custom ? { tiles: [S.custom], maxzoom: 18, attribution: 'Fond personnalisé' } : BASES[S.base] || BASES.ign;
+  const oaciDef = () => ({ tiles: [`https://data.geopf.fr/private/wmts?apikey=${encodeURIComponent(S.ignKey)}&SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.MAPS.SCAN-OACI&STYLE=normal&FORMAT=image/jpeg&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}`], maxzoom: 11, attribution: '© IGN / SIA Carte OACI' });
+  const baseDef = () => S.base === 'custom' && S.custom ? { tiles: [S.custom], maxzoom: 18, attribution: 'Fond personnalisé' }
+    : S.base === 'oaci' ? (S.ignKey ? oaciDef() : BASES.ign) : BASES[S.base] || BASES.ign;
   const oaipUrl = () => `https://api.tiles.openaip.net/api/data/openaip/{z}/{x}/{y}.png?apiKey=${encodeURIComponent(S.oaip)}`;
   const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
   const fc = (list, geom, props) => ({ type: 'FeatureCollection', features: list.map(o => ({ type: 'Feature', geometry: geom(o), properties: props(o) })) });
@@ -347,8 +349,10 @@
       // Trace, route
       map.addLayer({ id: 'track-shown', type: 'line', source: 'track-shown', paint: { 'line-color': '#7a3cff', 'line-width': 3, 'line-opacity': .8 } });
       map.addLayer({ id: 'trackline', type: 'line', source: 'trackline', paint: { 'line-color': '#1e7fff', 'line-width': 3 } });
-      map.addLayer({ id: 'route', type: 'line', source: 'route', paint: { 'line-color': '#ff2ea6', 'line-width': 4, 'line-opacity': .85 } });
-      map.addLayer({ id: 'leg', type: 'line', source: 'leg', paint: { 'line-color': '#ffb020', 'line-width': 3, 'line-dasharray': [2, 1.5] } });
+      map.addLayer({ id: 'route-casing', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 9, 'line-opacity': .9 } });
+      map.addLayer({ id: 'route', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#ff00cc', 'line-width': 5 } });
+      map.addLayer({ id: 'leg-casing', type: 'line', source: 'leg', layout: { 'line-cap': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 10, 'line-opacity': .85 } });
+      map.addLayer({ id: 'leg', type: 'line', source: 'leg', paint: { 'line-color': '#ff10f0', 'line-width': 6, 'line-dasharray': [1.6, 1.1] } });
       // Symboles (icônes seules : s'affichent même si les polices ne chargent pas)
       const iconLayout = (img, extra) => Object.assign({ 'icon-image': img, 'icon-allow-overlap': true, 'icon-ignore-placement': true }, extra || {});
       map.addLayer({ id: 'rpp', type: 'symbol', source: 'rpp', minzoom: 8, layout: iconLayout(['case', ['get', 'comp'], 'rpp-c', 'rpp-o'], { 'icon-size': ['interpolate', ['linear'], ['zoom'], 8, .7, 11, 1] }) });
@@ -959,7 +963,7 @@
     $('#s-alertsec').disabled = !S.alertOn;
     $('#s-clock').value = S.clock; $('#s-theme').value = S.theme; $('#s-wake').checked = S.wake; $('#s-autorec').checked = S.autorec;
     $('#s-aspon').checked = S.aspOn; $('#s-aspfloor').value = String(S.aspMaxFloor); $('#s-sivon').checked = S.sivOn; $('#s-rppon').checked = S.rppOn; $('#s-helion').checked = S.heliOn;
-    $('#s-base').value = S.base; $('#s-custom').value = S.custom; $('#s-oaip').value = S.oaip; $('#s-oaipon').checked = S.oaipOn; $('#s-zmax').value = String(S.zmax);
+    $('#s-base').value = S.base; $('#s-ignkey').value = S.ignKey; $('#s-custom').value = S.custom; $('#s-oaip').value = S.oaip; $('#s-oaipon').checked = S.oaipOn; $('#s-zmax').value = String(S.zmax);
     renderDataInfo();
     $('#s-userwps').innerHTML = userWps.length ? userWps.map(u => `<div class="row"><span class="lbl">${esc(u.name)} <small class="hint">${N.fmtCoord(u.lat, u.lon)}</small></span><button class="sm danger" data-u="${u.id}">✕</button></div>`).join('')
       : '<p class="hint">Aucun. Appui long sur la carte → « Enregistrer comme point perso ».</p>';
@@ -973,13 +977,14 @@
   bindS('#s-theme', 'theme', t => t.value, applyTheme);
   bindS('#s-wake', 'wake', t => t.checked, wake);
   bindS('#s-autorec', 'autorec', t => t.checked);
-  bindS('#s-base', 'base', t => t.value, setBase);
+  bindS('#s-base', 'base', t => t.value, () => { setBase(); if (S.base === 'oaci' && !S.ignKey) toast('Colle ta clé IGN sous « Fond de carte » pour afficher la carte OACI.', 5000); });
   bindS('#s-aspon', 'aspOn', t => t.checked, refreshDataLayers);
   bindS('#s-aspfloor', 'aspMaxFloor', t => +t.value, refreshDataLayers);
   bindS('#s-sivon', 'sivOn', t => t.checked, refreshDataLayers);
   bindS('#s-rppon', 'rppOn', t => t.checked, refreshDataLayers);
   bindS('#s-helion', 'heliOn', t => t.checked, refreshDataLayers);
   bindS('#s-custom', 'custom', t => t.value.trim(), setBase);
+  bindS('#s-ignkey', 'ignKey', t => t.value.trim(), setBase);
   bindS('#s-oaip', 'oaip', t => t.value.trim(), setBase);
   bindS('#s-oaipon', 'oaipOn', t => t.checked, setBase);
   bindS('#s-zmax', 'zmax', t => +t.value);

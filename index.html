@@ -176,16 +176,18 @@
     <div class="card">
       <div class="row"><label class="lbl">Fond de carte</label>
         <select id="s-base">
+          <option value="oaci">Carte OACI IGN/SIA (clé IGN requise)</option>
           <option value="ign">Plan IGN (clair, recommandé)</option>
           <option value="otm">OpenTopoMap (relief)</option>
           <option value="ortho">Photos aériennes IGN</option>
           <option value="osm">OpenStreetMap</option>
           <option value="custom">URL personnalisée</option>
         </select></div>
+      <div class="row col"><label class="lbl">Clé IGN Géoplateforme (pour la carte OACI)</label>
+        <input id="s-ignkey" placeholder="clé personnelle geoservices.ign.fr" autocomplete="off" autocapitalize="off"></div>
+      <p class="hint">Avec la carte OACI, désactive « Espaces aériens » dans les couches ci-dessus pour éviter le doublon (la carte les contient déjà, à la date de son édition).</p>
       <div class="row col"><label class="lbl">URL personnalisée (XYZ, {z}/{x}/{y})</label>
         <input id="s-custom" placeholder="https://…/{z}/{x}/{y}.png"></div>
-      <p class="hint">Carte OACI IGN : si tu disposes d'une clé Géoplateforme, colle par exemple
-        <code>https://data.geopf.fr/private/wmts?apikey=TA_CLE&amp;SERVICE=WMTS&amp;REQUEST=GetTile&amp;VERSION=1.0.0&amp;LAYER=GEOGRAPHICALGRIDSYSTEMS.MAPS.SCAN-OACI&amp;STYLE=normal&amp;FORMAT=image/jpeg&amp;TILEMATRIXSET=PM&amp;TILEMATRIX={z}&amp;TILEROW={y}&amp;TILECOL={x}</code> (accès et licence à vérifier).</p>
       <div class="row col"><label class="lbl">Clé API OpenAIP (facultative : secours de téléchargement et surimpression raster)</label>
         <input id="s-oaip" placeholder="clé gratuite sur openaip.net" autocomplete="off"></div>
       <div class="row"><label class="lbl">Surimpression raster OpenAIP</label><input id="s-oaipon" type="checkbox" class="switch"></div>
