@@ -1,0 +1,30 @@
+name: Données aéro
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+jobs:
+  maj:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Télécharger openAIP France
+        run: |
+          for t in apt asp nav rpp; do
+            curl -fsSL --retry 3 -o fr_$t.geojson "https://s3.openaip.net/openaip-system-exports/fr_$t.geojson"
+          done
+          ls -la fr_*.geojson
+      - name: Enregistrer dans le dépôt
+        run: |
+          git config user.name "maj-donnees"
+          git config user.email "actions@users.noreply.github.com"
+          git add fr_*.geojson
+          git diff --cached --quiet || git commit -m "Données openAIP $(date +%F)"
+          git push
+      - name: Republier le site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds" || true
