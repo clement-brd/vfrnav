@@ -1,5 +1,5 @@
 /* VFR Nav — service worker : fonctionnement hors ligne */
-const APP_CACHE = 'vfrnav-app-v9';
+const APP_CACHE = 'vfrnav-app-v10';
 const TILE_CACHE = 'vfrnav-tiles';
 const LIB = [
   'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js',
@@ -8,7 +8,7 @@ const LIB = [
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'nav.js', 'manifest.json', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(APP_CACHE).then(c => c.addAll(SHELL).then(() => c.addAll(LIB).catch(() => {}))).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(APP_CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' }))).then(() => c.addAll(LIB).catch(() => {}))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('vfrnav-app-') && k !== APP_CACHE).map(k => caches.delete(k))))
@@ -52,7 +52,7 @@ self.addEventListener('fetch', e => {
   if (new URL(url).origin === self.location.origin) {
     e.respondWith(caches.open(APP_CACHE).then(async c => {
       const hit = await c.match(req, { ignoreSearch: true }) || (req.mode === 'navigate' ? await c.match('index.html') : null);
-      const net = fetch(req).then(r => { if (r.ok) c.put(req, r.clone()); return r; }).catch(() => null);
+      const net = fetch(req, { cache: 'no-cache' }).then(r => { if (r.ok) c.put(req, r.clone()); return r; }).catch(() => null);
       return hit || (await net) || new Response('Hors ligne', { status: 503 });
     }));
   }

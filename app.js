@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.7.0';
+  const VERSION = '1.7.1';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1066,6 +1066,16 @@
   bindS('#s-oaipon', 'oaipOn', t => t.checked, setBase);
   bindS('#s-zmax', 'zmax', t => +t.value);
   $('#s-update').onclick = updateData;
+  $('#s-forceupd').onclick = async () => {
+    if (!confirm('Recharger la dernière version de l\'app ? Tes vols, ta flotte et tes traces sont conservés.')) return;
+    try {
+      const regs = navigator.serviceWorker ? await navigator.serviceWorker.getRegistrations() : [];
+      await Promise.all(regs.map(r => r.unregister()));
+      const keys = await caches.keys();
+      await Promise.all(keys.filter(k => k.startsWith('vfrnav-app-')).map(k => caches.delete(k)));
+    } catch (e) { console.warn(e); }
+    location.replace('./index.html?v=' + Date.now());
+  };
   $('#s-sim').onclick = toggleSim;
 
   /* Cartes hors ligne */
