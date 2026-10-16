@@ -151,21 +151,18 @@
 
   <!-- ================= LOG DE NAV ================= -->
   <section id="view-log" class="view page">
-    <h1>Log de navigation</h1>
-    <div class="card">
-      <b id="l-title"></b>
-      <p id="l-sub" class="hint"></p>
+    <div class="loghead">
+      <h1 id="l-title">Log de navigation</h1>
       <div class="row">
         <button id="l-atd" class="sm"></button>
+        <button id="l-full" class="sm ghost">⛶ Plein écran</button>
+        <button id="l-print" class="sm ghost">🖨 Imprimer</button>
+        <button id="l-csv" class="sm ghost">CSV</button>
         <button id="l-reset" class="sm ghost">Effacer les heures</button>
       </div>
     </div>
-    <div class="card scroll-x" style="margin-top:12px"><table id="l-table" class="logt"></table></div>
-    <p class="hint">HE : heure estimée (en italique : recalculée d'après le dernier point passé) · HR : heure réelle, notée automatiquement au passage de chaque point · Écart en minutes. Touche un point pour le renommer.</p>
-    <div class="row">
-      <button id="l-print" class="sm ghost">🖨 Imprimer / PDF</button>
-      <button id="l-csv" class="sm ghost">Exporter CSV</button>
-    </div>
+    <div id="l-sheet"></div>
+    <p class="hint">Touche un nom de point pour le renommer, une case de notes pour écrire. HE recalculée en orange · HR notée au passage de chaque point.</p>
   </section>
 
   <!-- ================= FLOTTE ================= -->

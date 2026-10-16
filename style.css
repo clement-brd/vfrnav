@@ -189,3 +189,57 @@ input[type=datetime-local] { min-height: 42px; }
   body.printing-log .card { border: 0; background: #fff; }
   body.printing-log .logt th, body.printing-log .logt td { color: #000; border-bottom: 1px solid #999; font-size: 11px; }
 }
+
+/* Log de navigation (style papier) */
+#view-log.page { padding-left: 8px; padding-right: 8px; }
+.loghead h1 { margin-bottom: 6px; }
+#l-sheet { overflow-x: auto; margin-top: 8px; }
+.vlog { display: grid; grid-template-columns: 74px 66px 70px 70px minmax(150px, 1.1fr) minmax(170px, 2fr); min-width: 640px;
+  border: 2px solid #5d7896; border-radius: 6px; background: var(--panel); font-variant-numeric: tabular-nums; }
+.vh { background: #a9cdf3; color: #0a1520; font-weight: 700; font-size: 13px; text-align: center; padding: 4px 3px; border-right: 1px solid #5d7896; border-bottom: 2px solid #5d7896;
+  display: flex; flex-direction: column; justify-content: center; line-height: 1.15; }
+.vh i, .vleg i { font-weight: 400; font-size: 11px; font-style: italic; }
+.vh small { font-weight: 400; }
+.vh.pth { border-right: 2px solid #5d7896; }
+.vleg { border-right: 1px solid #5d7896; border-bottom: 1px solid #5d7896; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2px; text-align: center; }
+.vleg.empty { border-bottom: 1px solid #5d7896; }
+.vleg .big { font-size: 19px; line-height: 1.15; }
+.vleg .hdg { color: var(--accent); }
+.vleg.cur { background: rgba(255, 0, 204, .12); }
+.vin { width: 62px; min-height: 30px; padding: 2px 4px; font-size: 16px; text-align: center; border-radius: 6px; flex: none; }
+.vin.mini { font-size: 12px; min-height: 24px; margin-top: 3px; color: var(--mute); font-style: italic; }
+.vpt { position: relative; display: flex; flex-direction: column; justify-content: center; padding: 4px 8px 4px 22px; margin-left: -14px;
+  background: var(--panel2); border-top: 1px solid #5d7896; border-bottom: 1px solid #5d7896; border-right: 2px solid #5d7896;
+  clip-path: polygon(0 50%, 16px 0, 100% 0, 100% 100%, 16px 100%); z-index: 1; }
+.vpt::before { content: ''; position: absolute; inset: 0; background: linear-gradient(to right, #5d7896, #5d7896) no-repeat; background-size: 0 0; }
+.vpt.cur { background: #ff00cc22; }
+.vpt.cur .vname { color: var(--accent); }
+.vpt.done { opacity: .6; }
+.vname { background: transparent; border: 0; border-bottom: 1px dashed var(--line); border-radius: 0; font-weight: 800; font-size: 18px; padding: 2px 0; min-height: 30px; color: var(--text); width: 100%; }
+.vname:focus { outline: none; border-bottom-color: var(--accent); }
+.vpt small { font-size: 12px; color: var(--mute); }
+.vpt .rev { color: var(--warn); font-style: italic; }
+.vnote { border-top: 1px solid #5d7896; border-bottom: 1px solid #5d7896; display: flex; }
+.vnote textarea { flex: 1; border: 0; border-radius: 0; background: transparent; resize: none; font-size: 14px; padding: 6px 8px; min-height: 72px; color: var(--text); }
+.vnote textarea:focus { outline: none; background: rgba(58, 160, 255, .08); }
+.vnote.cur { background: rgba(255, 0, 204, .06); }
+.vfoot { display: grid; grid-template-columns: 210px 1fr; min-width: 640px; border: 2px solid #5d7896; border-top: 0; border-radius: 0 0 6px 6px; }
+.vtot { background: #a9cdf3; color: #0a1520; padding: 8px; display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; }
+.vtot b { font-size: 16px; }
+.vinfo { background: var(--panel2); padding: 6px 10px; font-size: 14px; }
+.vinfo > div { display: flex; gap: 6px; padding: 3px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.vinfo > div span { color: var(--mute); }
+.vinfo .col { flex-direction: column; border-bottom: 0; }
+.vinfo textarea { min-height: 50px; resize: vertical; font-size: 14px; }
+.sheet-inner .opt.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-size: 17px; }
+.sheet-inner .opt.primary small { color: #ffe6f7; }
+/* plein écran du log */
+body.logfull #tabs { display: none; }
+body.logfull .view { bottom: 0; }
+@media (min-width: 900px) { .vlog { grid-template-columns: 90px 80px 86px 86px minmax(200px, 1.1fr) minmax(260px, 2fr); } }
+@media print {
+  body.printing-log #l-sheet { overflow: visible; }
+  body.printing-log .vh, body.printing-log .vtot { background: #cfe3fa !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.printing-log .vpt, body.printing-log .vinfo, body.printing-log .vlog { background: #fff !important; }
+  body.printing-log .vname, body.printing-log textarea, body.printing-log .vin { color: #000 !important; }
+}

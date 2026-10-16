@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.8.0';
+  const VERSION = '1.9.0';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -61,6 +61,10 @@
     plans.push(p); savePlans(); return p;
   }
   if (!plans.length) newPlan('Mon premier vol');
+  if (!LS.get('wptNames', false)) {
+    plans.forEach(p => { let n = 0; p.wps.forEach(w => { if (/^(WP\d+|Point .*)$/.test(w.name || '')) { const used = new Set(p.wps.map(x => x.name)); do { n++; } while (used.has('Wpt ' + n)); w.name = 'Wpt ' + n; } }); });
+    savePlans(); LS.set('wptNames', true);
+  }
   if (!getPlan(activePlanId)) activePlanId = plans[0].id;
   const curPlan = () => getPlan(activePlanId);
 
@@ -257,7 +261,7 @@
     for (const v of navaids) { if (fold(v.id) === q || fold(v.name).includes(q)) add({ ...v, kind: 'navaid' }, fold(v.id) === q ? 0 : 3); }
     for (const r of rpps) { const n = fold(r.name); if (n.startsWith(q) || n.includes(' ' + q)) add({ ...r, kind: 'rpp' }, 2); }
     const m = q.match(/^(-?\d+(?:[.,]\d+)?)[ ,;]+(-?\d+(?:[.,]\d+)?)$/);
-    if (m) add({ name: 'Point ' + m[1] + ' ' + m[2], lat: +m[1].replace(',', '.'), lon: +m[2].replace(',', '.'), kind: 'coord' }, 0);
+    if (m) add({ name: m[1] + ' ' + m[2], lat: +m[1].replace(',', '.'), lon: +m[2].replace(',', '.'), kind: 'coord' }, 0);
     return out.sort((a, b) => a.score - b.score).slice(0, limit).map(o => o.p);
   }
   const ptLabel = p => p.kind === 'ad' ? `${p.icao || p.id} — ${p.name}` : p.kind === 'navaid' ? `${p.id} ${p.type} — ${p.name}` : p.kind === 'rpp' ? `Point de report ${p.name}` : p.name;
@@ -577,27 +581,56 @@
   }
   const hasVac = code => /^LF[A-Z]{2}$/.test(code || '');
   const openUrl = u => window.open(u, '_blank');
+  // vol qui reçoit les points touchés sur la carte : celui en navigation, sinon le vol actif
+  const buildPlan = () => (nav.mode === 'plan' && getPlan(nav.planId)) || curPlan();
+  function wpFrom(p, plan) {
+    if (p.kind === 'free' || p.kind === 'coord') return { name: nextWpName(plan), full: '', lat: p.lat, lon: p.lon };
+    return toWp(p);
+  }
+  function addToNav(p) {
+    const tp = buildPlan(), w = wpFrom(p, tp);
+    tp.wps.push(w); resetAta(tp); savePlans(); refreshRoute(); renderSide(true);
+    const ac = getAc(tp.acId), log = N.computeLog(tp.wps, ac, { dir: +tp.wind.dir || 0, spd: +tp.wind.spd || 0 });
+    toast(tp.wps.length === 1 ? `Départ : ${w.name}. Touche le point suivant.` : `${w.name} ajouté (point ${tp.wps.length}) · ${log.totDist.toFixed(0)} NM · ${N.fmtDur(log.totMin)}`, 3500);
+  }
+  function startNewNav(p) {
+    if (nav.mode === 'plan') stopNav();
+    const np = newPlan('Nav du ' + new Date().toLocaleDateString('fr-FR'));
+    const old = curPlan(); if (old) { np.acId = old.acId; np.wind = { ...old.wind }; }
+    activePlanId = np.id; LS.set('activePlanId', activePlanId);
+    np.wps.push(wpFrom(p, np)); savePlans(); refreshRoute(); renderSide(true);
+    toast(`Nouvelle navigation depuis ${np.wps[0].name}. Touche le point suivant.`, 3500);
+  }
   function pointSheet(p) {
     const inPlan = p.kind === 'wp';
+    const tp = buildPlan(), n = tp.wps.length;
     let h = pointInfo(p);
+    // action principale : démarrer ou compléter la navigation
+    if (!inPlan) {
+      if (!n) h += `<button class="opt primary" data-a="start">🛫 Démarrer la navigation depuis ce point</button>`;
+      else {
+        h += `<button class="opt primary" data-a="add">+ Ajouter à la navigation<small>point ${n + 1} · après ${esc(tp.wps[n - 1].name)}</small></button>`;
+        h += `<button class="opt" data-a="start">🛫 Nouvelle navigation depuis ce point</button>`;
+      }
+    }
     try { if (map && mapReady) h += airspaceList(airspacesAt(map.project([p.lon, p.lat]))); } catch (e) { /* ignore */ }
     const vcode = (p.icao || (p.kind === 'wp' ? p.name : '') || '').toUpperCase();
     if (hasVac(vcode)) h += `<button class="opt" data-a="vac">📄 Carte VAC ${esc(vcode)}<small>SIA, cycle du ${airacDate().toLocaleDateString('fr-FR')}</small></button>`;
     h += `<button class="opt" data-a="direct">D→ Direct To</button>`;
-    if (!inPlan) h += `<button class="opt" data-a="add">+ Ajouter à la fin du vol « ${esc(curPlan().name)} »</button>`;
     if (p.kind === 'coord' || p.kind === 'free') h += `<button class="opt" data-a="save">★ Enregistrer comme point perso</button>`;
     if (p.kind === 'user') h += `<button class="opt" data-a="deluser">Supprimer ce point perso</button>`;
     sheet(h, root => root.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
       const a = b.dataset.a;
       if (a === 'vac') { openUrl(vacUrl(vcode)); return; }
-      if (a === 'direct') { if (inPlan) startPlanAt(p.idx, nav.mode === 'plan' ? nav.planId : activePlanId); else directTo(p); }
-      if (a === 'add') { curPlan().wps.push(toWp(p)); savePlans(); refreshRoute(); toast('Ajouté : ' + ptShort(p)); }
-      if (a === 'save') { const name = prompt('Nom du point', 'PT' + (userWps.length + 1)); if (name) { userWps.push({ id: uid(), name, lat: p.lat, lon: p.lon }); saveUserWps(); refreshDataLayers(); toast('Point perso enregistré'); } }
-      if (a === 'deluser') { userWps = userWps.filter(u => u.id !== p.id); saveUserWps(); refreshDataLayers(); }
       closeSheet();
+      if (a === 'start') { if (!n) addToNav(p); else startNewNav(p); }
+      if (a === 'add') addToNav(p);
+      if (a === 'direct') { if (inPlan) startPlanAt(p.idx, nav.mode === 'plan' ? nav.planId : activePlanId); else directTo(p); }
+      if (a === 'save') { const name = prompt('Nom du point', 'Wpt ' + (userWps.length + 1)); if (name) { userWps.push({ id: uid(), name, lat: p.lat, lon: p.lon }); saveUserWps(); refreshDataLayers(); toast('Point perso enregistré'); } }
+      if (a === 'deluser') { userWps = userWps.filter(u => u.id !== p.id); saveUserWps(); refreshDataLayers(); }
     }));
   }
-  const freePointSheet = (ll) => pointSheet({ name: 'Point ' + N.fmtCoord(ll.lat, ll.lng), lat: ll.lat, lon: ll.lng, kind: 'free' });
+  const freePointSheet = (ll) => pointSheet({ name: 'Point libre', lat: ll.lat, lon: ll.lng, kind: 'free' });
 
   function directToSheet() {
     let h = '<h3>Direct To</h3><input id="dt-q" placeholder="Rechercher un terrain, balise, point…" autocomplete="off"><div id="dt-res"></div>';
@@ -1175,8 +1208,8 @@
   const snap = () => { undoStack.push(JSON.stringify(curPlan().wps)); if (undoStack.length > 50) undoStack.shift(); };
   function nextWpName(p) {
     let n = 1; const names = new Set(p.wps.map(w => w.name));
-    while (names.has('WP' + n)) n++;
-    return 'WP' + n;
+    while (names.has('Wpt ' + n)) n++;
+    return 'Wpt ' + n;
   }
   function setEditMode(on) {
     editMode = on; undoStack = [];
@@ -1316,14 +1349,61 @@
   }
   function bindWpNames(root, p) { root.querySelectorAll('[data-wp]').forEach(b => b.onclick = () => wpSheet(p, +b.dataset.wp)); }
   function renderNavLog() {
-    const p = logPlan(), d = navLogData(p), f = flightOf(p);
+    const p = logPlan(), d = navLogData(p), f = flightOf(p), ac = d.ac, L = d.log, utc = d.utc;
     $('#l-title').textContent = p.name;
-    $('#l-sub').textContent = `${d.ac.reg || ''} ${d.ac.name || ''} · ${d.log.totDist.toFixed(0)} NM · ${N.fmtDur(d.log.totMin)}`
-      + (f.atd ? ` · décollage ${clk(f.atd, d.utc)}` : p.depTime ? ` · départ prévu ${clk(new Date(p.depTime).getTime(), d.utc)}` : ' · heure de départ non définie');
-    $('#l-table').innerHTML = p.wps.length >= 2 ? navLogTable(d, false) : '<tr><td class="hint">Crée une route (Carte → ✎, ou Prépa).</td></tr>';
-    bindWpNames($('#l-table'), p);
-    $('#l-atd').textContent = f.atd ? '🛫 Décollage : ' + clk(f.atd, d.utc) + ' (modifier)' : '🛫 Décollage maintenant';
+    $('#l-atd').textContent = f.atd ? '🛫 Décollage ' + clk(f.atd, utc) + ' (modifier)' : '🛫 Décollage maintenant';
+    const el = $('#l-sheet');
+    if (p.wps.length < 2) { el.innerHTML = '<p class="hint" style="padding:16px">Crée d\'abord une route : sur la carte, touche un terrain puis « Démarrer la navigation depuis ce point ».</p>'; return; }
+    const n = p.wps.length, f1 = v => isFinite(v) ? v.toFixed(1) : '—';
+    const fb = N.fuelBalance(L, ac, { extraMin: p.extraMin, onboard: p.onboard });
+    let h = `<div class="vlog" style="grid-template-rows: auto repeat(${2 * n}, minmax(38px, auto))">
+      <div class="vh" style="grid-column:1">Alt. <small>(ft)</small><i>alt. mini</i></div>
+      <div class="vh" style="grid-column:2">Cv<i>Rv</i></div>
+      <div class="vh" style="grid-column:3"><i>cumul</i>Dist. <small>(NM)</small><i>reste</i></div>
+      <div class="vh" style="grid-column:4"><i>av. vent</i>Temps<i>cumul</i></div>
+      <div class="vh pth" style="grid-column:5">Point de virage ou report</div>
+      <div class="vh" style="grid-column:6">Notes complémentaires<i>fréquences, QFU, cap, NOTAM…</i></div>
+      <div class="vleg empty" style="grid-column:1/5; grid-row:2"></div>`;
+    for (let k = 0; k < L.legs.length; k++) {
+      const lg = L.legs[k], row = 2 * k + 3, w = p.wps[k + 1], cls = d.active === k + 1 ? ' cur' : '';
+      const reste = L.totDist - lg.cumDist;
+      h += `<div class="vleg${cls}" style="grid-column:1; grid-row:${row}/span 2"><input class="vin" data-alt="${k + 1}" type="number" inputmode="numeric" value="${w.alt ?? ''}" placeholder="—"><input class="vin mini" data-altmin="${k + 1}" type="number" inputmode="numeric" value="${w.altMin ?? ''}" placeholder="mini"></div>
+        <div class="vleg${cls}" style="grid-column:2; grid-row:${row}/span 2"><b class="big hdg">${N.fmtHdg(lg.th)}</b><i>Rv ${N.fmtHdg(lg.tc)}</i></div>
+        <div class="vleg${cls}" style="grid-column:3; grid-row:${row}/span 2"><i>${f1(lg.cumDist)}</i><b class="big">${f1(lg.dist)}</b><i>${f1(reste)}</i></div>
+        <div class="vleg${cls}" style="grid-column:4; grid-row:${row}/span 2"><i>${lg.wspd ? String(Math.round(lg.wdir)).padStart(3, '0') + '/' + lg.wspd : 'sans vent'}</i><b class="big">${N.fmtDur(lg.min)}</b><i>${N.fmtDur(lg.cumMin)}</i></div>`;
+    }
+    h += `<div class="vleg empty" style="grid-column:1/5; grid-row:${2 * n + 1}"></div>`;
+    d.rows.forEach(r => {
+      const row = 2 * r.i + 2, cls = r.i === d.active ? ' cur' : r.ata ? ' done' : '';
+      const ap = airports.find(x => x.icao === (r.w.name || '').toUpperCase());
+      const hint = ap ? [ap.freqs && ap.freqs.length ? ap.freqs.map(q => q.t + ' ' + q.f).join(', ') : '', ap.elev !== null && ap.elev !== undefined ? 'Alt AD ' + ap.elev + ' ft' : '', ap.rwys && ap.rwys.length ? 'QFU ' + ap.rwys.map(x => x.des).join(' ') : ''].filter(Boolean).join(' · ') : 'Notes…';
+      const he = r.ata ? '' : (r.her && r.her !== r.he ? `<span class="rev">HE ${clk(r.her, utc)}</span>` : (r.he ? 'HE ' + clk(r.he, utc) : ''));
+      const hr = r.ata ? `HR ${clk(r.ata, utc)}${r.ecart !== null ? ` <span class="${Math.abs(r.ecart) <= 2 ? 'okc' : 'warnc'}">(${r.ecart > 0 ? '+' : ''}${r.ecart})</span>` : ''}` : '';
+      h += `<div class="vpt${cls}" style="grid-column:5; grid-row:${row}/span 2">
+          <input class="vname" data-name="${r.i}" value="${esc(r.w.name)}" maxlength="24" autocomplete="off" autocapitalize="characters">
+          <small>${r.i === 0 ? 'Départ · ' : r.i === n - 1 ? 'Arrivée · ' : ''}${he}${hr}${isFinite(r.fuelLeft) ? ` · <span class="${r.fuelLeft < (+ac.reserveMin || 0) / 60 * (+ac.conso || 0) ? 'badc' : ''}">${r.fuelLeft.toFixed(0)} L</span>` : ''}</small>
+        </div>
+        <div class="vnote${cls}" style="grid-column:6; grid-row:${row}/span 2"><textarea data-note="${r.i}" rows="2" placeholder="${esc(hint)}">${esc(r.w.note || '')}</textarea></div>`;
+    });
+    h += `</div>
+      <div class="vfoot">
+        <div class="vtot"><b>TOTAL</b><span>${f1(L.totDist)} NM</span><span>${N.fmtDur(L.totMin)}</span><span>${isFinite(L.totFuel) ? L.totFuel.toFixed(1) + ' L' : ''}</span></div>
+        <div class="vinfo">
+          <div><span>Date :</span><b>${p.depTime ? new Date(p.depTime).toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' }) : new Date().toLocaleDateString('fr-FR', { dateStyle: 'full' })}</b></div>
+          <div><span>Appareil :</span><b>${esc(ac.reg || '')} ${esc(ac.name || '')}</b></div>
+          <div><span>Vitesse de croisière et conso :</span><b>${ac.tas || '—'} kt · ${ac.conso || '—'} L/h</b></div>
+          <div><span>Carburant nécessaire :</span><b>${f1(fb.required)} L${isFinite(fb.onboard) ? ` · à bord ${f1(fb.onboard)} L · <span class="${fb.margin >= 0 ? 'okc' : 'badc'}">marge ${fb.margin >= 0 ? '+' : ''}${f1(fb.margin)} L</span>` : ''}</b></div>
+          <div class="col"><span>Infos diverses / plan de vol :</span><textarea id="l-pnote" rows="2" placeholder="Transpondeur, SIV, terrains de dégagement…">${esc(p.note || '')}</textarea></div>
+        </div>
+      </div>`;
+    el.innerHTML = h;
+    el.querySelectorAll('[data-name]').forEach(inp => inp.onchange = () => { const v = inp.value.trim().slice(0, 24); const w = p.wps[+inp.dataset.name]; if (!v) { inp.value = w.name; return; } if (!w.full) w.full = N.fmtCoord(w.lat, w.lon); w.name = v; savePlans(); refreshRoute(); renderSide(true); });
+    el.querySelectorAll('[data-note]').forEach(t => t.onchange = () => { p.wps[+t.dataset.note].note = t.value; savePlans(); });
+    el.querySelectorAll('[data-alt]').forEach(t => t.onchange = () => { p.wps[+t.dataset.alt].alt = numOrEmpty(t.value); savePlans(); });
+    el.querySelectorAll('[data-altmin]').forEach(t => t.onchange = () => { p.wps[+t.dataset.altmin].altMin = numOrEmpty(t.value); savePlans(); });
+    $('#l-pnote').onchange = e => { p.note = e.target.value; savePlans(); };
   }
+  $('#l-full').onclick = () => { document.body.classList.toggle('logfull'); $('#l-full').textContent = document.body.classList.contains('logfull') ? '⤡ Quitter le plein écran' : '⛶ Plein écran'; };
   $('#l-atd').onclick = () => {
     const p = logPlan(), f = flightOf(p);
     if (f.atd) { const v = prompt('Heure de décollage (HH:MM, heure ' + (S.clock === 'utc' ? 'UTC' : 'locale') + ')', clk(f.atd, S.clock === 'utc').replace('Z', ''));
@@ -1336,8 +1416,8 @@
   $('#l-print').onclick = () => { document.body.classList.add('printing-log'); setTimeout(() => { window.print(); document.body.classList.remove('printing-log'); }, 50); };
   $('#l-csv').onclick = () => {
     const d = navLogData(logPlan()), sep = ';';
-    const lines = [['Point', 'Fréq', 'Alt', 'Rv', 'Vent', 'Cv', 'Dist NM', 'Vs kt', 'Temps min', 'HE', 'HR', 'Carbu L'].join(sep)];
-    d.rows.forEach(r => { const l = r.lg; lines.push([r.w.name, r.freq || '', l && l.alt || '', l ? Math.round(l.tc) : '', l && l.wspd ? l.wdir + '/' + l.wspd : '', l ? Math.round(l.th) : '', l ? l.dist.toFixed(1) : '', l ? Math.round(l.gs) : '', l ? Math.round(l.min) : '', clk(r.he, d.utc), clk(r.ata, d.utc), isFinite(r.fuelLeft) ? r.fuelLeft.toFixed(1) : ''].join(sep)); });
+    const lines = [['Point', 'Fréq', 'Alt', 'Rv', 'Vent', 'Cv', 'Dist NM', 'Vs kt', 'Temps min', 'HE', 'HR', 'Carbu L', 'Notes'].join(sep)];
+    d.rows.forEach(r => { const l = r.lg; lines.push([r.w.name, r.freq || '', l && l.alt || '', l ? Math.round(l.tc) : '', l && l.wspd ? l.wdir + '/' + l.wspd : '', l ? Math.round(l.th) : '', l ? l.dist.toFixed(1) : '', l ? Math.round(l.gs) : '', l ? Math.round(l.min) : '', clk(r.he, d.utc), clk(r.ata, d.utc), isFinite(r.fuelLeft) ? r.fuelLeft.toFixed(1) : '', (r.w.note || '').replace(/[;\n]/g, ' ')].join(sep)); });
     shareFile(`log-${(d.p.name || 'vol').replace(/[^\w-]+/g, '_')}.csv`, '﻿' + lines.join('\n'), 'text/csv');
   };
 
