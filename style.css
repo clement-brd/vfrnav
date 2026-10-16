@@ -91,7 +91,7 @@ button:active { opacity: .7; }
 
 .plane { width: 40px; height: 40px; filter: drop-shadow(0 0 2px #000); }
 .wplabel { font-size: 12px; font-weight: 700; color: #fff; background: var(--accent); padding: 1px 5px; border-radius: 5px; white-space: nowrap;
-  transform: translate(0, -16px); pointer-events: none; }
+  pointer-events: none; }
 .wplabel.active { background: var(--warn); color: #000; }
 .adlabel { font-size: 11px; font-weight: 700; color: #102030; background: rgba(255,255,255,.85); padding: 0 4px; border-radius: 4px;
   transform: translate(0, -13px); pointer-events: none; white-space: nowrap; }
@@ -166,7 +166,7 @@ input[type=datetime-local] { min-height: 42px; }
 #editbar .hint { margin: 2px 0; }
 #view-map.editing #editbar { display: block; }
 #view-map.editing #instruments { display: none; }
-.wpedit { width: 26px; height: 26px; border-radius: 50%; background: #ff00cc; border: 3px solid #fff; box-shadow: 0 0 0 2px #ff00cc, 0 2px 6px rgba(0,0,0,.4); cursor: grab; position: relative; }
+.wpedit { width: 26px; height: 26px; border-radius: 50%; background: #ff00cc; border: 3px solid #fff; box-shadow: 0 0 0 2px #ff00cc, 0 2px 6px rgba(0,0,0,.4); cursor: grab; }
 .wpedit span { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); white-space: nowrap; background: #ff00cc; color: #fff;
   font-size: 12px; font-weight: 700; padding: 1px 6px; border-radius: 5px; }
 #mapbtns button#b-edit.on { background: #ff00cc; }
@@ -243,3 +243,9 @@ body.logfull .view { bottom: 0; }
   body.printing-log .vpt, body.printing-log .vinfo, body.printing-log .vlog { background: #fff !important; }
   body.printing-log .vname, body.printing-log textarea, body.printing-log .vin { color: #000 !important; }
 }
+
+/* La carte positionne elle-même les marqueurs : ne jamais surcharger position/transform */
+.maplibregl-marker.wpedit, .maplibregl-marker.wplabel { position: absolute; }
+#toast { display: flex; align-items: center; gap: 12px; }
+#toast button { background: #ff00cc; color: #fff; min-height: 34px; padding: 4px 12px; font-size: 15px; border-radius: 8px; flex: none; }
+#view-map.editing #map .maplibregl-canvas { cursor: crosshair; }

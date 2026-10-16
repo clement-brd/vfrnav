@@ -1,7 +1,7 @@
 /* VFR Nav — application (PWA) */
 (function () {
   'use strict';
-  const VERSION = '1.9.0';
+  const VERSION = '1.9.1';
   const N = window.Nav;
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -70,7 +70,15 @@
 
   /* ---------- UI utilitaires ---------- */
   let toastT;
-  function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.add('hidden'), ms); }
+  function toast(msg, ms = 2600, action) {
+    const t = $('#toast'); t.textContent = msg;
+    if (action) {
+      const b = document.createElement('button'); b.textContent = action.label;
+      b.onclick = ev => { ev.stopPropagation(); t.classList.add('hidden'); action.fn(); };
+      t.appendChild(b);
+    }
+    t.classList.remove('hidden'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.add('hidden'), action ? Math.max(ms, 6000) : ms);
+  }
   function sheet(html, bind) { $('#sheet-body').innerHTML = html; $('#sheet').classList.remove('hidden'); if (bind) bind($('#sheet-body')); }
   const closeSheet = () => $('#sheet').classList.add('hidden');
   $('#sheet-close').onclick = closeSheet;
@@ -587,11 +595,17 @@
     if (p.kind === 'free' || p.kind === 'coord') return { name: nextWpName(plan), full: '', lat: p.lat, lon: p.lon };
     return toWp(p);
   }
+  function undoAdd(tp, w) {
+    const i = tp.wps.lastIndexOf(w); if (i < 0) return;
+    tp.wps.splice(i, 1); resetAta(tp); savePlans(); refreshRoute(); renderSide(true); if (editMode) renderEditBar();
+    toast(`${w.name} retiré`);
+  }
   function addToNav(p) {
     const tp = buildPlan(), w = wpFrom(p, tp);
     tp.wps.push(w); resetAta(tp); savePlans(); refreshRoute(); renderSide(true);
+    const undo = { label: '↶ Retirer', fn: () => undoAdd(tp, w) };
     const ac = getAc(tp.acId), log = N.computeLog(tp.wps, ac, { dir: +tp.wind.dir || 0, spd: +tp.wind.spd || 0 });
-    toast(tp.wps.length === 1 ? `Départ : ${w.name}. Touche le point suivant.` : `${w.name} ajouté (point ${tp.wps.length}) · ${log.totDist.toFixed(0)} NM · ${N.fmtDur(log.totMin)}`, 3500);
+    toast(tp.wps.length === 1 ? `Départ : ${w.name}. Touche le point suivant.` : `${w.name} ajouté (point ${tp.wps.length}) · ${log.totDist.toFixed(0)} NM · ${N.fmtDur(log.totMin)}`, 6000, undo);
   }
   function startNewNav(p) {
     if (nav.mode === 'plan') stopNav();
@@ -1254,8 +1268,9 @@
       if (segDist(e.point, a, b) < 14) { ins = i; break; }
     }
     snap();
-    if (ins > 0) { p.wps.splice(ins, 0, wp); toast(`${wp.name} inséré`); } else p.wps.push(wp);
+    if (ins > 0) p.wps.splice(ins, 0, wp); else p.wps.push(wp);
     editChanged();
+    toast(ins > 0 ? `${wp.name} inséré (point ${ins + 1})` : `${wp.name} ajouté (point ${p.wps.length})`, 6000, { label: '↶ Retirer', fn: () => { undoStack.pop(); undoAdd(p, wp); } });
   }
   function renameWp(p, i) {
     const w = p.wps[i]; if (!w) return;

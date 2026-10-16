@@ -1,5 +1,5 @@
 /* VFR Nav — service worker : fonctionnement hors ligne */
-const APP_CACHE = 'vfrnav-app-v12';
+const APP_CACHE = 'vfrnav-app-v13';
 const TILE_CACHE = 'vfrnav-tiles';
 const LIB = [
   'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js',
